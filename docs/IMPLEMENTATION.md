@@ -623,12 +623,28 @@ process_names = ["cs2.exe"]
 dpi = 1200
 
 [[profiles.office.button_mappings]]
+physical_control = "g102:left"
+action = { kind = "logical_control", value = "mouse:left" }
+
+[[profiles.office.button_mappings]]
+physical_control = "g102:right"
+action = { kind = "logical_control", value = "mouse:right" }
+
+[[profiles.office.button_mappings]]
+physical_control = "g102:middle"
+action = { kind = "onboard_keyboard", usage_page = 0x07, usage = 0x2a, modifiers = 0x00 }
+
+[[profiles.office.button_mappings]]
 physical_control = "g102:side_back"
-action = { kind = "logical_control", value = "mouse:back" }
+action = { kind = "onboard_keyboard", usage_page = 0x07, usage = 0x19, modifiers = 0x01 }
 
 [[profiles.office.button_mappings]]
 physical_control = "g102:side_forward"
-action = { kind = "logical_control", value = "mouse:forward" }
+action = { kind = "onboard_keyboard", usage_page = 0x07, usage = 0x06, modifiers = 0x01 }
+
+[[profiles.office.button_mappings]]
+physical_control = "g102:dpi"
+action = { kind = "onboard_keyboard", usage_page = 0x07, usage = 0x04, modifiers = 0x01 }
 
 [profiles.cs2]
 dpi = 800
@@ -642,7 +658,12 @@ physical_control = "g102:side_forward"
 action = { kind = "logical_control", value = "mouse:back" }
 ~~~
 
-`physical_control` 必须使用能力快照返回的 canonical ID，不能保存本地化展示名。若 POC 证实板载单键动作可用，其编码采用结构化 HID Usage，例如 `{ kind = "onboard_keyboard", usage_page = 0x07, usage = 0x1e, modifiers = [] }`，不能使用有歧义的 `key:1` 字符串。
+`physical_control` 必须使用能力快照返回的 canonical ID，不能保存本地化展示名。若 POC 证实板载单键动作可用，其编码采用结构化 HID Usage，例如 `{ kind = "onboard_keyboard", usage_page = 0x07, usage = 0x1e, modifiers = 0x00 }`，不能使用有歧义的 `key:1` 字符串。
+
+办公配置的 G102 profile format `0x04` 槽位顺序固定为：左键、右键、中键、侧后 G4、侧前 G5、
+DPI 键 G6。2026-07-20 确认的目标动作依次为：左键、右键、`Backspace`、`Ctrl+V`、`Ctrl+C`、
+`Ctrl+A`。键盘动作使用 HID Keyboard Usage：`Backspace=0x2A`、`A=0x04`、`C=0x06`、`V=0x19`，
+左 Ctrl modifier 为 `0x01`。配置层必须保留 modifier，不能把组合键表示成宏。
 
 ### 9.3 校验
 

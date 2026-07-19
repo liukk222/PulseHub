@@ -36,6 +36,7 @@ pub struct LogicalControlId(pub String);
 pub struct HidKey {
     pub usage_page: u16,
     pub usage: u16,
+    pub modifiers: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

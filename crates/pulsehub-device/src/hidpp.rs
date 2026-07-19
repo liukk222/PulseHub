@@ -103,6 +103,46 @@ pub enum OnboardButtonAction {
     Unknown([u8; 4]),
 }
 
+/// G102 LIGHTSYNC 的六个物理槽位，顺序与 profile format 0x04 一致。
+pub const G102_BUTTON_NAMES: [&str; 6] = [
+    "左键",
+    "右键",
+    "滚轮键（中键）",
+    "侧键（后，G4）",
+    "侧键（前，G5）",
+    "DPI 切换键（G6）",
+];
+
+/// 用户确认的办公环境目标映射。该函数只构造内存模型，不执行设备 I/O。
+pub fn g102_office_button_actions() -> [OnboardButtonAction; 6] {
+    [
+        OnboardButtonAction::Mouse {
+            button: Some(1),
+            mask: 0x0001,
+        },
+        OnboardButtonAction::Mouse {
+            button: Some(2),
+            mask: 0x0002,
+        },
+        OnboardButtonAction::Keyboard {
+            modifiers: 0x00,
+            key: 0x2a,
+        },
+        OnboardButtonAction::Keyboard {
+            modifiers: 0x01,
+            key: 0x19,
+        },
+        OnboardButtonAction::Keyboard {
+            modifiers: 0x01,
+            key: 0x06,
+        },
+        OnboardButtonAction::Keyboard {
+            modifiers: 0x01,
+            key: 0x04,
+        },
+    ]
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DpiWriteResult {
     pub sensor_index: u8,
@@ -475,6 +515,31 @@ fn parse_onboard_button(raw: [u8; 4]) -> OnboardButtonAction {
         },
         (0xff, _) => OnboardButtonAction::Disabled,
         _ => OnboardButtonAction::Unknown(raw),
+    }
+}
+
+/// 将单一按键动作编码为 profile format 0x04 的四字节绑定。
+///
+/// 此函数不执行设备 I/O，并明确拒绝宏和未知动作。
+pub fn encode_onboard_button(action: &OnboardButtonAction) -> Result<[u8; 4], HidppError> {
+    match action {
+        OnboardButtonAction::Mouse { mask, .. } => {
+            let [high, low] = mask.to_be_bytes();
+            Ok([0x80, 0x01, high, low])
+        }
+        OnboardButtonAction::Keyboard { modifiers, key } => Ok([0x80, 0x02, *modifiers, *key]),
+        OnboardButtonAction::ConsumerControl { usage } => {
+            let [high, low] = usage.to_be_bytes();
+            Ok([0x80, 0x03, high, low])
+        }
+        OnboardButtonAction::Special { code, profile } => Ok([0x90, *code, 0, *profile]),
+        OnboardButtonAction::Disabled => Ok([0xff; 4]),
+        OnboardButtonAction::Macro { .. } => Err(HidppError::InvalidResponse(
+            "安全策略禁止编码宏动作".to_owned(),
+        )),
+        OnboardButtonAction::Unknown(_) => Err(HidppError::InvalidResponse(
+            "不能编码未知按键动作".to_owned(),
+        )),
     }
 }
 
@@ -853,8 +918,9 @@ mod tests {
 
     use super::{
         DpiSensorInfo, HidppError, OnboardButtonAction, OnboardMode, Transport, crc_ccitt,
-        parse_dpi_list, parse_onboard_profile, parse_onboard_profiles, request_long,
-        response_matches, set_sensor_dpi, validate_requested_dpi, validate_response,
+        encode_onboard_button, g102_office_button_actions, parse_dpi_list, parse_onboard_profile,
+        parse_onboard_profiles, request_long, response_matches, set_sensor_dpi,
+        validate_requested_dpi, validate_response,
     };
 
     const G102_FIXTURE: &str = include_str!("../tests/fixtures/g102-c092-release-5200.txt");
@@ -1013,6 +1079,29 @@ mod tests {
             OnboardButtonAction::Special { code: 5, .. }
         ));
         assert_eq!(profile.buttons[4], OnboardButtonAction::Disabled);
+    }
+
+    #[test]
+    fn encodes_confirmed_office_button_mapping() {
+        let encoded = g102_office_button_actions()
+            .iter()
+            .map(encode_onboard_button)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(
+            encoded,
+            [
+                [0x80, 0x01, 0x00, 0x01], // 左键
+                [0x80, 0x01, 0x00, 0x02], // 右键
+                [0x80, 0x02, 0x00, 0x2a], // Backspace
+                [0x80, 0x02, 0x01, 0x19], // Ctrl+V，侧后 G4
+                [0x80, 0x02, 0x01, 0x06], // Ctrl+C，侧前 G5
+                [0x80, 0x02, 0x01, 0x04], // Ctrl+A，DPI G6
+            ]
+        );
+
+        assert!(encode_onboard_button(&OnboardButtonAction::Macro { page: 1, offset: 2 }).is_err());
     }
 
     fn fixture_frame(key: &str) -> Vec<u8> {

@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use pulsehub_device::discovery::{HidCollectionInfo, enumerate_hid_collections};
 use pulsehub_device::hidpp::{
-    HidppProbeResult, OnboardButtonAction, probe_first_g102, set_first_g102_dpi,
+    G102_BUTTON_NAMES, HidppProbeResult, OnboardButtonAction, probe_first_g102, set_first_g102_dpi,
 };
 
 fn main() -> ExitCode {
@@ -249,7 +249,8 @@ fn print_hidpp_probe(result: &HidppProbeResult) {
             profile.shifted_dpi_index
         );
         for (index, action) in profile.buttons.iter().enumerate() {
-            println!("  button[{index}]={}", display_button_action(action));
+            let name = G102_BUTTON_NAMES.get(index).copied().unwrap_or("未知按键");
+            println!("  button[{index}] {name}={}", display_button_action(action));
         }
     }
 }
