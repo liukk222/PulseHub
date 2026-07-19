@@ -5,6 +5,7 @@ use std::fmt;
 use pulsehub_core::{DeviceCapabilities, DeviceIdentity, Profile};
 
 pub mod discovery;
+pub mod hidpp;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceState {

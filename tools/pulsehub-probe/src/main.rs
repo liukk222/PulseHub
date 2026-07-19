@@ -2,12 +2,15 @@ use std::env;
 use std::process::ExitCode;
 
 use pulsehub_device::discovery::{HidCollectionInfo, enumerate_hid_collections};
+use pulsehub_device::hidpp::{HidppProbeResult, probe_first_g102};
 
 fn main() -> ExitCode {
     let mut include_all = false;
+    let mut protocol_trace = false;
     for argument in env::args().skip(1) {
         match argument.as_str() {
             "--all" => include_all = true,
+            "--protocol-trace" => protocol_trace = true,
             "-h" | "--help" => {
                 print_help();
                 return ExitCode::SUCCESS;
@@ -29,7 +32,7 @@ fn main() -> ExitCode {
             "Logitech collection"
         }
     );
-    println!("安全性：本工具仅枚举设备并读取报告描述符，不发送 HID++ 或配置写入。\n");
+    println!("安全性：本工具仅枚举设备并执行 HID++ 查询，不发送配置写入。\n");
 
     let collections = match enumerate_hid_collections(include_all) {
         Ok(collections) => collections,
@@ -62,6 +65,17 @@ fn main() -> ExitCode {
         known_g102_count,
         vendor_interface_count
     );
+
+    if known_g102_count > 0 {
+        println!("\n开始 HID++ 只读能力查询……");
+        match probe_first_g102(protocol_trace) {
+            Ok(result) => print_hidpp_probe(&result),
+            Err(error) => {
+                eprintln!("HID++ 探测失败：{error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
 
     ExitCode::SUCCESS
 }
@@ -120,6 +134,36 @@ fn display_serial(value: Option<&str>) -> &str {
 }
 
 fn print_help() {
-    println!("用法：pulsehub-probe [--all]");
+    println!("用法：pulsehub-probe [--all] [--protocol-trace]");
     println!("  --all  枚举全部 HID collection；默认只显示 Logitech 设备");
+    println!("  --protocol-trace  输出有上限的原始 HID++ 请求与响应");
+}
+
+fn print_hidpp_probe(result: &HidppProbeResult) {
+    println!(
+        "HID++ 协议：{}.{}，功能数：{}",
+        result.protocol_major,
+        result.protocol_minor,
+        result.features.len()
+    );
+    for feature in &result.features {
+        println!(
+            "  feature index=0x{:02x} id=0x{:04x} type=0x{:02x} version={}",
+            feature.index, feature.id, feature.feature_type, feature.version
+        );
+    }
+    if result.dpi_sensors.is_empty() {
+        println!("DPI：设备未公开 ADJUSTABLE_DPI (0x2201)");
+    } else {
+        for sensor in &result.dpi_sensors {
+            let range = match sensor.step {
+                Some(step) => format!("{}–{}，步进 {}", sensor.minimum, sensor.maximum, step),
+                None => format!("离散值 {:?}", sensor.discrete_values),
+            };
+            println!(
+                "DPI 传感器 {}：{}；当前 {}；默认 {}",
+                sensor.index, range, sensor.current, sensor.default
+            );
+        }
+    }
 }

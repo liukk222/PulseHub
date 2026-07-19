@@ -1,0 +1,13 @@
+# PulseHub 脱敏实机 fixture，采集日期：2026-07-19
+# 不包含设备路径、序列号或写入命令。
+vid=046d
+pid=c092
+release=5200
+short_collection=usage_page:ff00,usage:0001,descriptor:36,input:7,output:7
+long_collection=usage_page:ff00,usage:0002,descriptor:36,input:20,output:20
+protocol_version_response=11 ff 00 18 04 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+feature_set_response=11 ff 00 08 01 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00
+adjustable_dpi_feature_response=11 ff 00 08 0a 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00
+dpi_sensor_count_response=11 ff 0a 08 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+dpi_list_response=11 ff 0a 18 00 00 32 e0 32 1f 40 00 00 00 00 00 00 00 00 00
+dpi_current_response=11 ff 0a 28 00 0c 80 03 20 00 00 00 00 00 00 00 00 00 00 00
