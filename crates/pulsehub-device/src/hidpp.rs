@@ -43,6 +43,7 @@ pub struct HidppProbeResult {
     pub features: Vec<HidppFeature>,
     pub dpi_sensors: Vec<DpiSensorInfo>,
     pub onboard_profiles: Option<OnboardProfilesInfo>,
+    pub onboard_profile: Option<OnboardProfileSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +79,28 @@ pub struct OnboardProfilesInfo {
     pub various_info: u8,
     pub mode: OnboardMode,
     pub current_profile: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnboardProfileSnapshot {
+    pub address: u16,
+    pub enabled: bool,
+    pub report_rate_hz: u16,
+    pub default_dpi_index: u8,
+    pub shifted_dpi_index: u8,
+    pub dpi_slots: Vec<u16>,
+    pub buttons: Vec<OnboardButtonAction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OnboardButtonAction {
+    Macro { page: u8, offset: u8 },
+    Mouse { button: Option<u8>, mask: u16 },
+    Keyboard { modifiers: u8, key: u8 },
+    ConsumerControl { usage: u16 },
+    Special { code: u8, profile: u8 },
+    Disabled,
+    Unknown([u8; 4]),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,12 +266,17 @@ fn probe(transport: &mut impl Transport) -> Result<HidppProbeResult, HidppError>
         Some(feature) => read_dpi_sensors(transport, feature.index)?,
         None => Vec::new(),
     };
-    let onboard_profiles = match features
+    let onboard_feature_index = features
         .iter()
         .find(|feature| feature.id == ONBOARD_PROFILES_ID)
-    {
-        Some(feature) => Some(read_onboard_profiles(transport, feature.index)?),
+        .map(|feature| feature.index);
+    let onboard_profiles = match onboard_feature_index {
+        Some(index) => Some(read_onboard_profiles(transport, index)?),
         None => None,
+    };
+    let onboard_profile = match (onboard_feature_index, &onboard_profiles) {
+        (Some(index), Some(info)) => read_first_onboard_profile(transport, index, info)?,
+        _ => None,
     };
     Ok(HidppProbeResult {
         protocol_major,
@@ -256,6 +284,7 @@ fn probe(transport: &mut impl Transport) -> Result<HidppProbeResult, HidppError>
         features,
         dpi_sensors,
         onboard_profiles,
+        onboard_profile,
     })
 }
 
@@ -297,6 +326,156 @@ fn parse_onboard_profiles(
         mode: mode.into(),
         current_profile: current[1],
     })
+}
+
+fn read_first_onboard_profile(
+    transport: &mut impl Transport,
+    feature_index: u8,
+    info: &OnboardProfilesInfo,
+) -> Result<Option<OnboardProfileSnapshot>, HidppError> {
+    if info.profile_count == 0 {
+        return Ok(None);
+    }
+    let directory = read_onboard_sector(transport, feature_index, 0, info.sector_size)?;
+    validate_sector_crc(&directory)?;
+    let address = u16::from_be_bytes([directory[0], directory[1]]);
+    if address == 0xffff {
+        return Ok(None);
+    }
+    if address >= u16::from(info.sector_count) {
+        return Err(HidppError::InvalidResponse(format!(
+            "板载配置地址 0x{address:04x} 超出 {} 个扇区",
+            info.sector_count
+        )));
+    }
+    let enabled = directory[2] != 0;
+    let profile = read_onboard_sector(transport, feature_index, address, info.sector_size)?;
+    validate_sector_crc(&profile)?;
+    parse_onboard_profile(address, enabled, &profile, info.button_count)
+}
+
+fn read_onboard_sector(
+    transport: &mut impl Transport,
+    feature_index: u8,
+    sector: u16,
+    sector_size: u16,
+) -> Result<Vec<u8>, HidppError> {
+    if !(18..=4096).contains(&sector_size) {
+        return Err(HidppError::InvalidResponse(format!(
+            "板载扇区大小 {sector_size} 超出安全范围 18–4096"
+        )));
+    }
+    let size = usize::from(sector_size);
+    let mut data = vec![0_u8; size];
+    for logical_offset in (0..size).step_by(16) {
+        let read_offset = logical_offset.min(size - 16);
+        let [sector_high, sector_low] = sector.to_be_bytes();
+        let [offset_high, offset_low] = u16::try_from(read_offset)
+            .map_err(|_| HidppError::InvalidResponse("板载扇区偏移溢出".to_owned()))?
+            .to_be_bytes();
+        let mut request_parameters = [0_u8; 16];
+        request_parameters[..4].copy_from_slice(&[
+            sector_high,
+            sector_low,
+            offset_high,
+            offset_low,
+        ]);
+        let response = request_long(transport, feature_index, 5, request_parameters)?;
+        let response_parameters = parameters(&response, 16)?;
+        data[read_offset..read_offset + 16].copy_from_slice(&response_parameters[..16]);
+    }
+    Ok(data)
+}
+
+fn validate_sector_crc(sector: &[u8]) -> Result<(), HidppError> {
+    if sector.len() < 2 {
+        return Err(HidppError::InvalidResponse("板载扇区过短".to_owned()));
+    }
+    let payload_length = sector.len() - 2;
+    let expected = u16::from_be_bytes([sector[payload_length], sector[payload_length + 1]]);
+    let actual = crc_ccitt(&sector[..payload_length]);
+    if actual != expected {
+        return Err(HidppError::InvalidResponse(format!(
+            "板载扇区 CRC 不匹配：设备 0x{expected:04x}，计算 0x{actual:04x}"
+        )));
+    }
+    Ok(())
+}
+
+fn crc_ccitt(data: &[u8]) -> u16 {
+    let mut crc = 0xffff_u16;
+    for byte in data {
+        let temp = (crc >> 8) ^ u16::from(*byte);
+        crc <<= 8;
+        let mut quick = temp ^ (temp >> 4);
+        crc ^= quick;
+        quick <<= 5;
+        crc ^= quick;
+        quick <<= 7;
+        crc ^= quick;
+    }
+    crc
+}
+
+fn parse_onboard_profile(
+    address: u16,
+    enabled: bool,
+    sector: &[u8],
+    button_count: u8,
+) -> Result<Option<OnboardProfileSnapshot>, HidppError> {
+    let button_count = usize::from(button_count);
+    if button_count > 16 || sector.len() < 32 + button_count * 4 + 2 {
+        return Err(HidppError::InvalidResponse(
+            "板载配置的按键区域超出已知格式".to_owned(),
+        ));
+    }
+    let report_rate_divisor = u16::from(sector[0]).max(1);
+    let dpi_slots = sector[3..13]
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .filter(|dpi| !matches!(*dpi, 0 | 0xffff))
+        .collect();
+    let buttons = sector[32..32 + button_count * 4]
+        .chunks_exact(4)
+        .map(|raw| parse_onboard_button([raw[0], raw[1], raw[2], raw[3]]))
+        .collect();
+
+    Ok(Some(OnboardProfileSnapshot {
+        address,
+        enabled,
+        report_rate_hz: 1000 / report_rate_divisor,
+        default_dpi_index: sector[1],
+        shifted_dpi_index: sector[2],
+        dpi_slots,
+        buttons,
+    }))
+}
+
+fn parse_onboard_button(raw: [u8; 4]) -> OnboardButtonAction {
+    match (raw[0], raw[1]) {
+        (0x00, _) => OnboardButtonAction::Macro {
+            page: raw[1],
+            offset: raw[3],
+        },
+        (0x80, 0x01) => {
+            let mask = u16::from_be_bytes([raw[2], raw[3]]);
+            let button = (mask != 0).then(|| u8::try_from(mask.trailing_zeros() + 1).unwrap_or(0));
+            OnboardButtonAction::Mouse { button, mask }
+        }
+        (0x80, 0x02) => OnboardButtonAction::Keyboard {
+            modifiers: raw[2],
+            key: raw[3],
+        },
+        (0x80, 0x03) => OnboardButtonAction::ConsumerControl {
+            usage: u16::from_be_bytes([raw[2], raw[3]]),
+        },
+        (0x90, _) => OnboardButtonAction::Special {
+            code: raw[1],
+            profile: raw[3],
+        },
+        (0xff, _) => OnboardButtonAction::Disabled,
+        _ => OnboardButtonAction::Unknown(raw),
+    }
 }
 
 fn get_feature(transport: &mut impl Transport, id: u16) -> Result<HidppFeature, HidppError> {
@@ -443,6 +622,30 @@ fn request(
         parameters[1],
         parameters[2],
     ];
+    let response = transport.transact(&request, REQUEST_TIMEOUT)?;
+    validate_response(&request, &response)?;
+    Ok(response)
+}
+
+fn request_long(
+    transport: &mut impl Transport,
+    feature_index: u8,
+    function: u8,
+    parameters: [u8; 16],
+) -> Result<Vec<u8>, HidppError> {
+    if function > 0x0f {
+        return Err(HidppError::InvalidResponse(
+            "HID++ 函数号超出 4 位范围".to_owned(),
+        ));
+    }
+    let mut request = [0_u8; 20];
+    request[..4].copy_from_slice(&[
+        REPORT_ID_LONG,
+        WIRED_DEVICE_INDEX,
+        feature_index,
+        (function << 4) | SOFTWARE_ID,
+    ]);
+    request[4..].copy_from_slice(&parameters);
     let response = transport.transact(&request, REQUEST_TIMEOUT)?;
     validate_response(&request, &response)?;
     Ok(response)
@@ -613,8 +816,16 @@ impl WindowsHidppTransport {
 impl Transport for WindowsHidppTransport {
     fn transact(&mut self, request: &[u8], timeout: Duration) -> Result<Vec<u8>, HidppError> {
         self.trace("TX", request);
-        let written = self
-            .short
+        let device = match request.first() {
+            Some(&REPORT_ID_SHORT) => &self.short,
+            Some(&REPORT_ID_LONG) => &self.long,
+            _ => {
+                return Err(HidppError::Backend(
+                    "拒绝发送未知 HID++ 报告类型".to_owned(),
+                ));
+            }
+        };
+        let written = device
             .write(request)
             .map_err(|error| HidppError::Backend(error.to_string()))?;
         if written != request.len() {
@@ -641,7 +852,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        DpiSensorInfo, HidppError, OnboardMode, Transport, parse_dpi_list, parse_onboard_profiles,
+        DpiSensorInfo, HidppError, OnboardButtonAction, OnboardMode, Transport, crc_ccitt,
+        parse_dpi_list, parse_onboard_profile, parse_onboard_profiles, request_long,
         response_matches, set_sensor_dpi, validate_requested_dpi, validate_response,
     };
 
@@ -745,6 +957,62 @@ mod tests {
             transport.request,
             [0x10, 0xff, 0x0a, 0x38, 0x00, 0x03, 0x20]
         );
+    }
+
+    #[test]
+    fn crc_matches_ccitt_false_check_value() {
+        assert_eq!(crc_ccitt(b"123456789"), 0x29b1);
+    }
+
+    #[test]
+    fn encodes_memory_read_as_long_report() {
+        let mut transport = RecordingTransport {
+            response: vec![
+                0x11, 0xff, 0x0f, 0x58, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ],
+            request: Vec::new(),
+        };
+        let mut parameters = [0_u8; 16];
+        parameters[..4].copy_from_slice(&[0x00, 0x01, 0x00, 0x10]);
+        request_long(&mut transport, 0x0f, 5, parameters).unwrap();
+
+        assert_eq!(transport.request[0], 0x11);
+        assert_eq!(&transport.request[1..8], &[0xff, 0x0f, 0x58, 0, 1, 0, 0x10]);
+        assert_eq!(transport.request.len(), 20);
+    }
+
+    #[test]
+    fn parses_profile_dpi_slots_and_button_actions() {
+        let mut sector = vec![0_u8; 255];
+        sector[0] = 1;
+        sector[1] = 1;
+        sector[2] = 2;
+        for (offset, dpi) in [400_u16, 800, 1600, 3200, 0].into_iter().enumerate() {
+            let start = 3 + offset * 2;
+            sector[start..start + 2].copy_from_slice(&dpi.to_le_bytes());
+        }
+        sector[32..36].copy_from_slice(&[0x80, 0x01, 0x00, 0x01]);
+        sector[36..40].copy_from_slice(&[0x80, 0x02, 0x02, 0x04]);
+        sector[40..44].copy_from_slice(&[0x80, 0x03, 0x00, 0xe9]);
+        sector[44..48].copy_from_slice(&[0x90, 0x05, 0x00, 0x00]);
+        sector[48..52].copy_from_slice(&[0xff, 0, 0, 0]);
+        sector[52..56].copy_from_slice(&[0x00, 0x03, 0, 0x20]);
+
+        let profile = parse_onboard_profile(1, true, &sector, 6).unwrap().unwrap();
+        assert_eq!(profile.report_rate_hz, 1000);
+        assert_eq!(profile.dpi_slots, [400, 800, 1600, 3200]);
+        assert_eq!(
+            profile.buttons[0],
+            OnboardButtonAction::Mouse {
+                button: Some(1),
+                mask: 1
+            }
+        );
+        assert!(matches!(
+            profile.buttons[3],
+            OnboardButtonAction::Special { code: 5, .. }
+        ));
+        assert_eq!(profile.buttons[4], OnboardButtonAction::Disabled);
     }
 
     fn fixture_frame(key: &str) -> Vec<u8> {

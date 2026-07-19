@@ -2,7 +2,9 @@ use std::env;
 use std::process::ExitCode;
 
 use pulsehub_device::discovery::{HidCollectionInfo, enumerate_hid_collections};
-use pulsehub_device::hidpp::{HidppProbeResult, probe_first_g102, set_first_g102_dpi};
+use pulsehub_device::hidpp::{
+    HidppProbeResult, OnboardButtonAction, probe_first_g102, set_first_g102_dpi,
+};
 
 fn main() -> ExitCode {
     let mut include_all = false;
@@ -235,5 +237,45 @@ fn print_hidpp_probe(result: &HidppProbeResult) {
         );
     } else {
         println!("板载配置：设备未公开 ONBOARD_PROFILES (0x8100)");
+    }
+    if let Some(profile) = &result.onboard_profile {
+        println!(
+            "板载配置快照：sector=0x{:04x} enabled={} report_rate={}Hz dpi_slots={:?} default_index={} shifted_index={}",
+            profile.address,
+            profile.enabled,
+            profile.report_rate_hz,
+            profile.dpi_slots,
+            profile.default_dpi_index,
+            profile.shifted_dpi_index
+        );
+        for (index, action) in profile.buttons.iter().enumerate() {
+            println!("  button[{index}]={}", display_button_action(action));
+        }
+    }
+}
+
+fn display_button_action(action: &OnboardButtonAction) -> String {
+    match action {
+        OnboardButtonAction::Macro { page, offset } => {
+            format!("macro(page=0x{page:02x}, offset=0x{offset:02x})")
+        }
+        OnboardButtonAction::Mouse { button, mask } => match button {
+            Some(button) => format!("mouse_button({button}, mask=0x{mask:04x})"),
+            None => format!("mouse_button(mask=0x{mask:04x})"),
+        },
+        OnboardButtonAction::Keyboard { modifiers, key } => {
+            format!("keyboard(modifiers=0x{modifiers:02x}, key=0x{key:02x})")
+        }
+        OnboardButtonAction::ConsumerControl { usage } => {
+            format!("consumer_control(usage=0x{usage:04x})")
+        }
+        OnboardButtonAction::Special { code, profile } => {
+            format!("special(code=0x{code:02x}, profile=0x{profile:02x})")
+        }
+        OnboardButtonAction::Disabled => "disabled".to_owned(),
+        OnboardButtonAction::Unknown(raw) => format!(
+            "unknown({:02x} {:02x} {:02x} {:02x})",
+            raw[0], raw[1], raw[2], raw[3]
+        ),
     }
 }
