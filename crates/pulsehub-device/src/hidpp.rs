@@ -44,13 +44,30 @@ pub struct HidppProbeResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DpiWriteResult {
+    pub sensor_index: u8,
+    pub before: u16,
+    pub requested: u16,
+    pub after: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HidppError {
     PlatformUnsupported,
     InterfaceNotFound,
     Backend(String),
     Timeout,
+    InvalidDpi {
+        requested: u16,
+        minimum: u16,
+        maximum: u16,
+        step: Option<u16>,
+    },
     InvalidResponse(String),
-    Device { code: u8, description: &'static str },
+    Device {
+        code: u8,
+        description: &'static str,
+    },
 }
 
 impl fmt::Display for HidppError {
@@ -60,6 +77,21 @@ impl fmt::Display for HidppError {
             Self::InterfaceNotFound => formatter.write_str("未找到匹配的 G102 HID++ 短/长报告接口"),
             Self::Backend(message) => write!(formatter, "HID 后端错误：{message}"),
             Self::Timeout => formatter.write_str("等待 HID++ 响应超时"),
+            Self::InvalidDpi {
+                requested,
+                minimum,
+                maximum,
+                step,
+            } => match step {
+                Some(step) => write!(
+                    formatter,
+                    "DPI {requested} 不受支持；有效范围为 {minimum}–{maximum}，步进 {step}"
+                ),
+                None => write!(
+                    formatter,
+                    "DPI {requested} 不在设备公布的离散值范围 {minimum}–{maximum} 内"
+                ),
+            },
             Self::InvalidResponse(message) => write!(formatter, "无效 HID++ 响应：{message}"),
             Self::Device { code, description } => {
                 write!(
@@ -79,8 +111,51 @@ pub fn probe_first_g102(protocol_trace: bool) -> Result<HidppProbeResult, HidppE
     probe(&mut transport)
 }
 
+#[cfg(windows)]
+pub fn set_first_g102_dpi(
+    requested: u16,
+    protocol_trace: bool,
+) -> Result<DpiWriteResult, HidppError> {
+    let mut transport = WindowsHidppTransport::open(protocol_trace)?;
+    let probe = probe(&mut transport)?;
+    let feature = probe
+        .features
+        .iter()
+        .find(|feature| feature.id == ADJUSTABLE_DPI_ID)
+        .ok_or_else(|| {
+            HidppError::InvalidResponse("设备未公开 ADJUSTABLE_DPI (0x2201)".to_owned())
+        })?;
+    let sensor = probe
+        .dpi_sensors
+        .first()
+        .ok_or_else(|| HidppError::InvalidResponse("设备没有 DPI 传感器".to_owned()))?;
+    validate_requested_dpi(sensor, requested)?;
+
+    set_sensor_dpi(&mut transport, feature.index, sensor.index, requested)?;
+    let after = read_sensor_dpi(&mut transport, feature.index, sensor.index)?.0;
+    if after != requested {
+        return Err(HidppError::InvalidResponse(format!(
+            "DPI 写后回读不一致：请求 {requested}，设备返回 {after}"
+        )));
+    }
+    Ok(DpiWriteResult {
+        sensor_index: sensor.index,
+        before: sensor.current,
+        requested,
+        after,
+    })
+}
+
 #[cfg(not(windows))]
 pub fn probe_first_g102(_protocol_trace: bool) -> Result<HidppProbeResult, HidppError> {
+    Err(HidppError::PlatformUnsupported)
+}
+
+#[cfg(not(windows))]
+pub fn set_first_g102_dpi(
+    _requested: u16,
+    _protocol_trace: bool,
+) -> Result<DpiWriteResult, HidppError> {
     Err(HidppError::PlatformUnsupported)
 }
 
@@ -177,25 +252,69 @@ fn read_dpi_sensors(
         let index = list_parameters[0];
         let (minimum, maximum, step, discrete_values) = parse_dpi_list(&list_parameters[1..])?;
 
-        let current_response = request(transport, feature_index, 2, [index, 0, 0])?;
-        let current_parameters = parameters(&current_response, 5)?;
-        if current_parameters[0] != index {
-            return Err(HidppError::InvalidResponse(format!(
-                "DPI 传感器索引不匹配：请求 {index}，响应 {}",
-                current_parameters[0]
-            )));
-        }
+        let (current, default) = read_sensor_dpi(transport, feature_index, index)?;
         sensors.push(DpiSensorInfo {
             index,
             minimum,
             maximum,
             step,
             discrete_values,
-            current: u16::from_be_bytes([current_parameters[1], current_parameters[2]]),
-            default: u16::from_be_bytes([current_parameters[3], current_parameters[4]]),
+            current,
+            default,
         });
     }
     Ok(sensors)
+}
+
+fn read_sensor_dpi(
+    transport: &mut impl Transport,
+    feature_index: u8,
+    sensor_index: u8,
+) -> Result<(u16, u16), HidppError> {
+    let response = request(transport, feature_index, 2, [sensor_index, 0, 0])?;
+    let response_parameters = parameters(&response, 5)?;
+    if response_parameters[0] != sensor_index {
+        return Err(HidppError::InvalidResponse(format!(
+            "DPI 传感器索引不匹配：请求 {sensor_index}，响应 {}",
+            response_parameters[0]
+        )));
+    }
+    Ok((
+        u16::from_be_bytes([response_parameters[1], response_parameters[2]]),
+        u16::from_be_bytes([response_parameters[3], response_parameters[4]]),
+    ))
+}
+
+fn set_sensor_dpi(
+    transport: &mut impl Transport,
+    feature_index: u8,
+    sensor_index: u8,
+    dpi: u16,
+) -> Result<(), HidppError> {
+    let [high, low] = dpi.to_be_bytes();
+    request(transport, feature_index, 3, [sensor_index, high, low])?;
+    Ok(())
+}
+
+fn validate_requested_dpi(sensor: &DpiSensorInfo, requested: u16) -> Result<(), HidppError> {
+    let in_range = (sensor.minimum..=sensor.maximum).contains(&requested);
+    let aligned = match sensor.step {
+        Some(step) if step > 0 => requested
+            .checked_sub(sensor.minimum)
+            .is_some_and(|delta| delta % step == 0),
+        Some(_) => false,
+        None => sensor.discrete_values.contains(&requested),
+    };
+    if in_range && aligned {
+        Ok(())
+    } else {
+        Err(HidppError::InvalidDpi {
+            requested,
+            minimum: sensor.minimum,
+            maximum: sensor.maximum,
+            step: sensor.step,
+        })
+    }
 }
 
 fn parse_dpi_list(bytes: &[u8]) -> Result<(u16, u16, Option<u16>, Vec<u16>), HidppError> {
@@ -434,7 +553,12 @@ impl Transport for WindowsHidppTransport {
 
 #[cfg(test)]
 mod tests {
-    use super::{HidppError, parse_dpi_list, response_matches, validate_response};
+    use std::time::Duration;
+
+    use super::{
+        DpiSensorInfo, HidppError, Transport, parse_dpi_list, response_matches, set_sensor_dpi,
+        validate_requested_dpi, validate_response,
+    };
 
     const G102_FIXTURE: &str = include_str!("../tests/fixtures/g102-c092-release-5200.txt");
 
@@ -485,6 +609,43 @@ mod tests {
         assert!(!G102_FIXTURE.contains("path"));
     }
 
+    #[test]
+    fn validates_requested_dpi_against_runtime_range() {
+        let sensor = DpiSensorInfo {
+            index: 0,
+            minimum: 50,
+            maximum: 8000,
+            step: Some(50),
+            discrete_values: vec![50, 8000],
+            current: 3200,
+            default: 800,
+        };
+        assert!(validate_requested_dpi(&sensor, 800).is_ok());
+        assert!(matches!(
+            validate_requested_dpi(&sensor, 25),
+            Err(HidppError::InvalidDpi { .. })
+        ));
+        assert!(matches!(
+            validate_requested_dpi(&sensor, 825),
+            Err(HidppError::InvalidDpi { .. })
+        ));
+    }
+
+    #[test]
+    fn encodes_set_dpi_as_function_three() {
+        let mut transport = RecordingTransport {
+            response: vec![
+                0x11, 0xff, 0x0a, 0x38, 0x00, 0x03, 0x20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ],
+            request: Vec::new(),
+        };
+        set_sensor_dpi(&mut transport, 0x0a, 0, 800).unwrap();
+        assert_eq!(
+            transport.request,
+            [0x10, 0xff, 0x0a, 0x38, 0x00, 0x03, 0x20]
+        );
+    }
+
     fn fixture_frame(key: &str) -> Vec<u8> {
         let prefix = format!("{key}=");
         G102_FIXTURE
@@ -494,5 +655,17 @@ mod tests {
             .split_ascii_whitespace()
             .map(|byte| u8::from_str_radix(byte, 16).expect("fixture 必须包含十六进制字节"))
             .collect()
+    }
+
+    struct RecordingTransport {
+        response: Vec<u8>,
+        request: Vec<u8>,
+    }
+
+    impl Transport for RecordingTransport {
+        fn transact(&mut self, request: &[u8], _timeout: Duration) -> Result<Vec<u8>, HidppError> {
+            self.request = request.to_vec();
+            Ok(self.response.clone())
+        }
     }
 }

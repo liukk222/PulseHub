@@ -2,15 +2,32 @@ use std::env;
 use std::process::ExitCode;
 
 use pulsehub_device::discovery::{HidCollectionInfo, enumerate_hid_collections};
-use pulsehub_device::hidpp::{HidppProbeResult, probe_first_g102};
+use pulsehub_device::hidpp::{HidppProbeResult, probe_first_g102, set_first_g102_dpi};
 
 fn main() -> ExitCode {
     let mut include_all = false;
     let mut protocol_trace = false;
-    for argument in env::args().skip(1) {
+    let mut requested_dpi = None;
+    let mut confirm_device_write = false;
+    let mut arguments = env::args().skip(1);
+    while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--all" => include_all = true,
             "--protocol-trace" => protocol_trace = true,
+            "--confirm-device-write" => confirm_device_write = true,
+            "--set-dpi" => {
+                let Some(value) = arguments.next() else {
+                    eprintln!("--set-dpi 后必须提供 DPI 数值");
+                    return ExitCode::from(2);
+                };
+                requested_dpi = match value.parse::<u16>() {
+                    Ok(value) => Some(value),
+                    Err(_) => {
+                        eprintln!("无效 DPI 数值：{value}");
+                        return ExitCode::from(2);
+                    }
+                };
+            }
             "-h" | "--help" => {
                 print_help();
                 return ExitCode::SUCCESS;
@@ -23,6 +40,15 @@ fn main() -> ExitCode {
         }
     }
 
+    if requested_dpi.is_some() && !confirm_device_write {
+        eprintln!("拒绝写入：--set-dpi 必须同时提供 --confirm-device-write");
+        return ExitCode::from(2);
+    }
+    if requested_dpi.is_none() && confirm_device_write {
+        eprintln!("--confirm-device-write 只能与 --set-dpi 一起使用");
+        return ExitCode::from(2);
+    }
+
     println!("PulseHub HID 只读探测");
     println!(
         "模式：{}",
@@ -32,7 +58,11 @@ fn main() -> ExitCode {
             "Logitech collection"
         }
     );
-    println!("安全性：本工具仅枚举设备并执行 HID++ 查询，不发送配置写入。\n");
+    if let Some(dpi) = requested_dpi {
+        println!("写入模式：已显式请求将 DPI 设置为 {dpi}，完成后执行回读校验。\n");
+    } else {
+        println!("安全性：本工具仅枚举设备并执行 HID++ 查询，不发送配置写入。\n");
+    }
 
     let collections = match enumerate_hid_collections(include_all) {
         Ok(collections) => collections,
@@ -72,6 +102,20 @@ fn main() -> ExitCode {
             Ok(result) => print_hidpp_probe(&result),
             Err(error) => {
                 eprintln!("HID++ 探测失败：{error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    if let Some(dpi) = requested_dpi {
+        println!("\n执行已确认的 DPI 写入……");
+        match set_first_g102_dpi(dpi, protocol_trace) {
+            Ok(result) => println!(
+                "DPI 写入成功：传感器 {}，写入前 {}，请求 {}，回读 {}。",
+                result.sensor_index, result.before, result.requested, result.after
+            ),
+            Err(error) => {
+                eprintln!("DPI 写入失败：{error}");
                 return ExitCode::FAILURE;
             }
         }
@@ -134,9 +178,13 @@ fn display_serial(value: Option<&str>) -> &str {
 }
 
 fn print_help() {
-    println!("用法：pulsehub-probe [--all] [--protocol-trace]");
+    println!(
+        "用法：pulsehub-probe [--all] [--protocol-trace] [--set-dpi <DPI> --confirm-device-write]"
+    );
     println!("  --all  枚举全部 HID collection；默认只显示 Logitech 设备");
     println!("  --protocol-trace  输出有上限的原始 HID++ 请求与响应");
+    println!("  --set-dpi <DPI>  设置真实硬件 DPI；单独使用时拒绝执行");
+    println!("  --confirm-device-write  显式确认本次 --set-dpi 写入");
 }
 
 fn print_hidpp_probe(result: &HidppProbeResult) {
