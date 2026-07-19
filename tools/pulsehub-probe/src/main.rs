@@ -214,4 +214,26 @@ fn print_hidpp_probe(result: &HidppProbeResult) {
             );
         }
     }
+    if let Some(profiles) = &result.onboard_profiles {
+        println!(
+            "板载配置：mode={:?} current={} profiles={} rom_profiles={} buttons={} sectors={}×{}B",
+            profiles.mode,
+            profiles.current_profile,
+            profiles.profile_count,
+            profiles.rom_profile_count,
+            profiles.button_count,
+            profiles.sector_count,
+            profiles.sector_size
+        );
+        println!(
+            "  格式：memory=0x{:02x} profile=0x{:02x} macro=0x{:02x} layout=0x{:02x} info=0x{:02x}",
+            profiles.memory_model_id,
+            profiles.profile_format_id,
+            profiles.macro_format_id,
+            profiles.mechanical_layout,
+            profiles.various_info
+        );
+    } else {
+        println!("板载配置：设备未公开 ONBOARD_PROFILES (0x8100)");
+    }
 }

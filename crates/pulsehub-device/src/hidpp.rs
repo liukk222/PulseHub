@@ -12,6 +12,7 @@ const SOFTWARE_ID: u8 = 0x08;
 const ROOT_FEATURE_INDEX: u8 = 0x00;
 const FEATURE_SET_ID: u16 = 0x0001;
 const ADJUSTABLE_DPI_ID: u16 = 0x2201;
+const ONBOARD_PROFILES_ID: u16 = 0x8100;
 const REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_FEATURE_COUNT: u8 = 64;
 const MAX_TRACE_FRAMES: usize = 256;
@@ -41,6 +42,42 @@ pub struct HidppProbeResult {
     pub protocol_minor: u8,
     pub features: Vec<HidppFeature>,
     pub dpi_sensors: Vec<DpiSensorInfo>,
+    pub onboard_profiles: Option<OnboardProfilesInfo>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnboardMode {
+    NoChange,
+    Onboard,
+    Host,
+    Unknown(u8),
+}
+
+impl From<u8> for OnboardMode {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => Self::NoChange,
+            1 => Self::Onboard,
+            2 => Self::Host,
+            value => Self::Unknown(value),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnboardProfilesInfo {
+    pub memory_model_id: u8,
+    pub profile_format_id: u8,
+    pub macro_format_id: u8,
+    pub profile_count: u8,
+    pub rom_profile_count: u8,
+    pub button_count: u8,
+    pub sector_count: u8,
+    pub sector_size: u16,
+    pub mechanical_layout: u8,
+    pub various_info: u8,
+    pub mode: OnboardMode,
+    pub current_profile: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,11 +243,59 @@ fn probe(transport: &mut impl Transport) -> Result<HidppProbeResult, HidppError>
         Some(feature) => read_dpi_sensors(transport, feature.index)?,
         None => Vec::new(),
     };
+    let onboard_profiles = match features
+        .iter()
+        .find(|feature| feature.id == ONBOARD_PROFILES_ID)
+    {
+        Some(feature) => Some(read_onboard_profiles(transport, feature.index)?),
+        None => None,
+    };
     Ok(HidppProbeResult {
         protocol_major,
         protocol_minor,
         features,
         dpi_sensors,
+        onboard_profiles,
+    })
+}
+
+fn read_onboard_profiles(
+    transport: &mut impl Transport,
+    feature_index: u8,
+) -> Result<OnboardProfilesInfo, HidppError> {
+    let description_response = request(transport, feature_index, 0, [0, 0, 0])?;
+    let description = parameters(&description_response, 16)?;
+    let mode_response = request(transport, feature_index, 2, [0, 0, 0])?;
+    let mode = parameters(&mode_response, 1)?[0];
+    let current_response = request(transport, feature_index, 4, [0, 0, 0])?;
+    let current = parameters(&current_response, 2)?;
+
+    parse_onboard_profiles(description, mode, current)
+}
+
+fn parse_onboard_profiles(
+    description: &[u8],
+    mode: u8,
+    current: &[u8],
+) -> Result<OnboardProfilesInfo, HidppError> {
+    if description.len() < 16 || current.len() < 2 {
+        return Err(HidppError::InvalidResponse(
+            "板载配置响应长度不足".to_owned(),
+        ));
+    }
+    Ok(OnboardProfilesInfo {
+        memory_model_id: description[0],
+        profile_format_id: description[1],
+        macro_format_id: description[2],
+        profile_count: description[3],
+        rom_profile_count: description[4],
+        button_count: description[5],
+        sector_count: description[6],
+        sector_size: u16::from_be_bytes([description[7], description[8]]),
+        mechanical_layout: description[9],
+        various_info: description[10],
+        mode: mode.into(),
+        current_profile: current[1],
     })
 }
 
@@ -556,8 +641,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        DpiSensorInfo, HidppError, Transport, parse_dpi_list, response_matches, set_sensor_dpi,
-        validate_requested_dpi, validate_response,
+        DpiSensorInfo, HidppError, OnboardMode, Transport, parse_dpi_list, parse_onboard_profiles,
+        response_matches, set_sensor_dpi, validate_requested_dpi, validate_response,
     };
 
     const G102_FIXTURE: &str = include_str!("../tests/fixtures/g102-c092-release-5200.txt");
@@ -607,6 +692,22 @@ mod tests {
         assert_eq!(u16::from_be_bytes([current[7], current[8]]), 800);
         assert!(!G102_FIXTURE.contains("serial"));
         assert!(!G102_FIXTURE.contains("path"));
+    }
+
+    #[test]
+    fn parses_onboard_profile_capabilities_from_fixture() {
+        let description = fixture_frame("onboard_description_response");
+        let mode = fixture_frame("onboard_mode_response");
+        let current = fixture_frame("onboard_current_profile_response");
+        let info = parse_onboard_profiles(&description[4..], mode[4], &current[4..]).unwrap();
+
+        assert_eq!(info.mode, OnboardMode::Host);
+        assert_eq!(info.profile_count, 1);
+        assert_eq!(info.rom_profile_count, 1);
+        assert_eq!(info.button_count, 6);
+        assert_eq!(info.sector_count, 16);
+        assert_eq!(info.sector_size, 255);
+        assert_eq!(info.current_profile, 0);
     }
 
     #[test]

@@ -11,3 +11,6 @@ adjustable_dpi_feature_response=11 ff 00 08 0a 00 01 00 00 00 00 00 00 00 00 00 
 dpi_sensor_count_response=11 ff 0a 08 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 dpi_list_response=11 ff 0a 18 00 00 32 e0 32 1f 40 00 00 00 00 00 00 00 00 00
 dpi_current_response=11 ff 0a 28 00 0c 80 03 20 00 00 00 00 00 00 00 00 00 00 00
+onboard_description_response=11 ff 0f 08 01 04 01 01 01 06 10 00 ff 0a 01 00 00 00 00 00
+onboard_mode_response=11 ff 0f 28 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+onboard_current_profile_response=11 ff 0f 48 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
