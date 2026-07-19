@@ -149,6 +149,7 @@ pub struct DpiWriteResult {
     pub before: u16,
     pub requested: u16,
     pub after: u16,
+    pub changed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,6 +245,16 @@ pub fn set_first_g102_dpi(
         .ok_or_else(|| HidppError::InvalidResponse("设备没有 DPI 传感器".to_owned()))?;
     validate_requested_dpi(sensor, requested)?;
 
+    if sensor.current == requested {
+        return Ok(DpiWriteResult {
+            sensor_index: sensor.index,
+            before: sensor.current,
+            requested,
+            after: sensor.current,
+            changed: false,
+        });
+    }
+
     set_sensor_dpi(&mut transport, feature.index, sensor.index, requested)?;
     let after = read_sensor_dpi(&mut transport, feature.index, sensor.index)?.0;
     if after != requested {
@@ -256,6 +267,7 @@ pub fn set_first_g102_dpi(
         before: sensor.current,
         requested,
         after,
+        changed: true,
     })
 }
 

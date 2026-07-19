@@ -12,6 +12,8 @@ pulsehub-device = { path = "../../crates/pulsehub-device" }
 pulsehub-ipc = { path = "../../crates/pulsehub-ipc" }
 pulsehub-profile = { path = "../../crates/pulsehub-profile" }
 
+[target.'cfg(windows)'.dependencies]
+active-win-pos-rs = "0.11.0"
+
 [lints]
 workspace = true
-

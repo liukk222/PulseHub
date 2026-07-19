@@ -161,8 +161,16 @@ fn main() -> ExitCode {
         println!("\n执行已确认的 DPI 写入……");
         match set_first_g102_dpi(dpi, protocol_trace) {
             Ok(result) => println!(
-                "DPI 写入成功：传感器 {}，写入前 {}，请求 {}，回读 {}。",
-                result.sensor_index, result.before, result.requested, result.after
+                "DPI {}：传感器 {}，写入前 {}，请求 {}，回读 {}。",
+                if result.changed {
+                    "写入成功"
+                } else {
+                    "已经一致，未重复写入"
+                },
+                result.sensor_index,
+                result.before,
+                result.requested,
+                result.after
             ),
             Err(error) => {
                 eprintln!("DPI 写入失败：{error}");

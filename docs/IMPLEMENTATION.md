@@ -405,6 +405,14 @@ stateDiagram-v2
 
 连续前台事件可使用约 `50–100 ms` 的一次性合并窗口，只处理最后一个窗口；该值必须通过实际 Alt+Tab 与游戏启动测试确定。
 
+阶段 3 当前先实现可独立验证的一次性路径：`pulsehub-agent --inspect-foreground` 通过安全封装库读取
+前台进程完整路径，并只输出匹配结果；
+`--apply-current-environment --confirm-device-write` 才按 schema v1 的选择模式与进程规则应用运行态
+DPI。2026-07-20 实机识别前台 `ChatGPT.exe` 为 Office，目标为 `1800 DPI`；设备状态已经一致，
+因此命中幂等分支且未发送 `SET_SENSOR_DPI`。`EnvironmentTracker` 已对映射到同一环境的连续事件
+去重，并支持在设备重连/恢复时失效。常驻 `EVENT_SYSTEM_FOREGROUND` hook 与消息合并尚未接入，
+不能把当前一次性命令描述为已经实现自动切换。
+
 ### 7.2 切换流程
 
 ~~~mermaid
