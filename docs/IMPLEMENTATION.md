@@ -424,6 +424,14 @@ DPI。2026-07-20 实机识别前台 `ChatGPT.exe` 为 Office，目标为 `1800 D
 幂等跳过、到期停止和 hook 卸载。由于验证期间未启动 `cs2.exe`，Office→CS2→Office 的真实事件、
 800/1800 DPI 回读和快速 Alt+Tab 合并仍属于待验收项。
 
+同日完成第二轮真实前台切换验收。用户配置临时调整为 Office `3200 DPI`、CS2 `100 DPI`；监听启动
+后依次观察到 `ChatGPT.exe → Office` 将运行态 DPI 从 1800 写为 3200、`cs2.exe → Cs2` 从 3200
+写为 100、`explorer.exe → Office` 从 100 恢复为 3200，三次写入均通过设备回读。随后
+`ChatGPT.exe` 等仍属于 Office 的窗口事件被环境状态机去重，没有重复应用。用户现实操作确认 Office
+鼠标移动明显更快、CS2 明显更慢，功能正常；退出时 hook 正常卸载。因此
+Office→CS2→Office 自动 DPI 切换的主要实机路径已通过，快速连续 Alt+Tab、睡眠恢复、热拔插和
+设备忙退避仍待专项测试。
+
 ### 7.2 切换流程
 
 ~~~mermaid
