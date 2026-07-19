@@ -5,7 +5,7 @@ use std::time::Duration;
 #[cfg(windows)]
 pub fn run(
     exit_after: Option<Duration>,
-    mut on_foreground_changed: impl FnMut() -> Result<(), String>,
+    mut on_foreground_changed: impl FnMut() -> Option<Duration>,
 ) -> Result<(), String> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, mpsc};
@@ -30,7 +30,7 @@ pub fn run(
         .map_err(|error| format!("安装 Ctrl+C 处理器失败：{error}"))?;
 
     let started = Instant::now();
-    on_foreground_changed()?;
+    let mut retry_at = on_foreground_changed().map(|delay| Instant::now() + delay);
     while !stopping.load(Ordering::Acquire)
         && exit_after.is_none_or(|duration| started.elapsed() < duration)
     {
@@ -38,9 +38,13 @@ pub fn run(
             Ok(()) => {
                 std::thread::sleep(Duration::from_millis(75));
                 while receiver.try_recv().is_ok() {}
-                on_foreground_changed()?;
+                retry_at = on_foreground_changed().map(|delay| Instant::now() + delay);
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if retry_at.is_some_and(|deadline| Instant::now() >= deadline) {
+                    retry_at = on_foreground_changed().map(|delay| Instant::now() + delay);
+                }
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 return Err("Windows 前台事件通道意外断开".to_owned());
             }
@@ -54,7 +58,7 @@ pub fn run(
 #[cfg(not(windows))]
 pub fn run(
     _exit_after: Option<Duration>,
-    _on_foreground_changed: impl FnMut() -> Result<(), String>,
+    _on_foreground_changed: impl FnMut() -> Option<Duration>,
 ) -> Result<(), String> {
     Err("前台事件监听当前仅支持 Windows".to_owned())
 }

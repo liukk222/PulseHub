@@ -11,10 +11,10 @@ use pulsehub_config_store::{
     ConfigDocument, ProfileName, SelectionMode, default_config_path, load_or_create_default,
 };
 use pulsehub_core::Environment;
-use pulsehub_device::hidpp::set_first_g102_dpi;
+use pulsehub_device::hidpp::{HidppError, set_first_g102_dpi};
 use pulsehub_ipc::PROTOCOL_VERSION;
 use pulsehub_profile::{
-    EnvironmentTracker, ProcessRule, SelectionPolicy, select_environment_with_rules,
+    EnvironmentTracker, ProcessRule, RetryBackoff, SelectionPolicy, select_environment_with_rules,
 };
 
 #[derive(Debug, Default)]
@@ -34,6 +34,12 @@ struct EnvironmentTarget {
     dpi: u16,
 }
 
+#[derive(Debug)]
+struct ApplyFailure {
+    message: String,
+    retryable: bool,
+}
+
 fn main() -> ExitCode {
     let arguments = match parse_arguments() {
         Ok(arguments) => arguments,
@@ -41,6 +47,18 @@ fn main() -> ExitCode {
             eprintln!("{message}");
             print_help();
             return ExitCode::from(2);
+        }
+    };
+    #[cfg(windows)]
+    let _single_instance = match single_instance::SingleInstance::new("Local\\PulseHub.Agent.v1") {
+        Ok(instance) if instance.is_single() => instance,
+        Ok(_) => {
+            eprintln!("PulseHub agent 已在当前用户会话中运行，拒绝启动第二个实例。");
+            return ExitCode::from(3);
+        }
+        Err(error) => {
+            eprintln!("PulseHub 单实例锁创建失败：{error}");
+            return ExitCode::FAILURE;
         }
     };
     let path = match default_config_path() {
@@ -94,7 +112,7 @@ fn inspect_or_apply(config: &ConfigDocument, apply: bool) -> ExitCode {
     match apply_target(&target) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{}", error.message);
             ExitCode::FAILURE
         }
     }
@@ -102,18 +120,44 @@ fn inspect_or_apply(config: &ConfigDocument, apply: bool) -> ExitCode {
 
 fn run_watcher(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCode {
     let mut tracker = EnvironmentTracker::default();
+    let mut backoff = RetryBackoff::default();
     println!("自动切换监听已启动；按 Ctrl+C 退出。仅切换运行态 DPI，不写入板载闪存。");
     let result = watcher::run(exit_after_seconds.map(Duration::from_secs), || {
-        let target = resolve_target(config)?;
-        if tracker.observe(target.environment).is_none() {
+        let target = match resolve_target(config) {
+            Ok(target) => target,
+            Err(error) => {
+                let delay = backoff.record_failure();
+                eprintln!(
+                    "前台进程识别暂时失败：{error}；{} ms 后重试。",
+                    delay.as_millis()
+                );
+                return Some(delay);
+            }
+        };
+        if tracker.current() == Some(target.environment) {
             println!(
                 "前台进程：{}；环境仍为 {:?}，跳过重复应用。",
                 target.executable_name, target.environment
             );
-            return Ok(());
+            return None;
         }
         print_target(&target);
-        apply_target(&target)
+        match apply_target(&target) {
+            Ok(()) => {
+                tracker.observe(target.environment);
+                backoff.record_success();
+                None
+            }
+            Err(error) if error.retryable => {
+                let delay = backoff.record_failure();
+                eprintln!("{}；{} ms 后重试。", error.message, delay.as_millis());
+                Some(delay)
+            }
+            Err(error) => {
+                eprintln!("{}；该错误不会自动重试。", error.message);
+                None
+            }
+        }
     });
     match result {
         Ok(()) => {
@@ -149,7 +193,7 @@ fn print_target(target: &EnvironmentTarget) {
     );
 }
 
-fn apply_target(target: &EnvironmentTarget) -> Result<(), String> {
+fn apply_target(target: &EnvironmentTarget) -> Result<(), ApplyFailure> {
     match set_first_g102_dpi(target.dpi, false) {
         Ok(result) if result.changed => {
             println!(
@@ -162,7 +206,16 @@ fn apply_target(target: &EnvironmentTarget) -> Result<(), String> {
             println!("运行态 DPI 已是 {}，跳过重复写入。", result.after);
             Ok(())
         }
-        Err(error) => Err(format!("运行态 DPI 应用失败：{error}")),
+        Err(error) => {
+            let retryable = !matches!(
+                error,
+                HidppError::PlatformUnsupported | HidppError::InvalidDpi { .. }
+            );
+            Err(ApplyFailure {
+                message: format!("运行态 DPI 应用失败：{error}"),
+                retryable,
+            })
+        }
     }
 }
 

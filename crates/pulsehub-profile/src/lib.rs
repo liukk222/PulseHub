@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use pulsehub_core::Environment;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionPolicy {
@@ -25,7 +26,35 @@ pub struct EnvironmentTracker {
     current: Option<Environment>,
 }
 
+#[derive(Debug, Default)]
+pub struct RetryBackoff {
+    failures: u32,
+}
+
+impl RetryBackoff {
+    pub fn record_failure(&mut self) -> Duration {
+        const DELAYS_MS: [u64; 6] = [250, 500, 1_000, 2_000, 5_000, 10_000];
+        let index = usize::try_from(self.failures)
+            .unwrap_or(usize::MAX)
+            .min(DELAYS_MS.len() - 1);
+        self.failures = self.failures.saturating_add(1);
+        Duration::from_millis(DELAYS_MS[index])
+    }
+
+    pub fn record_success(&mut self) {
+        self.failures = 0;
+    }
+
+    pub fn failures(&self) -> u32 {
+        self.failures
+    }
+}
+
 impl EnvironmentTracker {
+    pub fn current(&self) -> Option<Environment> {
+        self.current
+    }
+
     pub fn observe(&mut self, target: Environment) -> Option<EnvironmentTransition> {
         if self.current == Some(target) {
             return None;
@@ -130,5 +159,19 @@ mod tests {
         );
         tracker.invalidate();
         assert_eq!(tracker.observe(Environment::Cs2).unwrap().previous, None);
+    }
+
+    #[test]
+    fn retry_backoff_is_bounded_and_resets_after_success() {
+        let mut backoff = RetryBackoff::default();
+        assert_eq!(backoff.record_failure(), Duration::from_millis(250));
+        assert_eq!(backoff.record_failure(), Duration::from_millis(500));
+        for _ in 0..10 {
+            let delay = backoff.record_failure();
+            assert!(delay <= Duration::from_secs(10));
+        }
+        backoff.record_success();
+        assert_eq!(backoff.failures(), 0);
+        assert_eq!(backoff.record_failure(), Duration::from_millis(250));
     }
 }
