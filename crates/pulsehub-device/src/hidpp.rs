@@ -159,6 +159,12 @@ pub struct OnboardWriteResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnboardModeWriteResult {
+    pub before: OnboardMode,
+    pub after: OnboardMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HidppError {
     PlatformUnsupported,
     InterfaceNotFound,
@@ -267,6 +273,36 @@ pub fn apply_first_g102_office_buttons(
     apply_office_buttons(&mut transport)
 }
 
+#[cfg(windows)]
+pub fn activate_first_g102_onboard_mode(
+    protocol_trace: bool,
+) -> Result<OnboardModeWriteResult, HidppError> {
+    let mut transport = WindowsHidppTransport::open(protocol_trace)?;
+    if transport.product_id != 0xc092 || transport.release_number != 0x5200 {
+        return Err(HidppError::InvalidResponse(format!(
+            "拒绝模式切换：仅验证过 046d:c092 release=5200，当前为 046d:{:04x} release={:04x}",
+            transport.product_id, transport.release_number
+        )));
+    }
+    let feature = get_feature(&mut transport, ONBOARD_PROFILES_ID)?;
+    if feature.index == 0 {
+        return Err(HidppError::InvalidResponse(
+            "设备未公开 ONBOARD_PROFILES (0x8100)".to_owned(),
+        ));
+    }
+    let before = read_onboard_mode(&mut transport, feature.index)?;
+    if before != OnboardMode::Onboard {
+        set_onboard_mode(&mut transport, feature.index, OnboardMode::Onboard)?;
+    }
+    let after = read_onboard_mode(&mut transport, feature.index)?;
+    if after != OnboardMode::Onboard {
+        return Err(HidppError::InvalidResponse(format!(
+            "板载模式写后回读不一致：设备返回 {after:?}"
+        )));
+    }
+    Ok(OnboardModeWriteResult { before, after })
+}
+
 #[cfg(not(windows))]
 pub fn probe_first_g102(_protocol_trace: bool) -> Result<HidppProbeResult, HidppError> {
     Err(HidppError::PlatformUnsupported)
@@ -284,6 +320,13 @@ pub fn set_first_g102_dpi(
 pub fn apply_first_g102_office_buttons(
     _protocol_trace: bool,
 ) -> Result<OnboardWriteResult, HidppError> {
+    Err(HidppError::PlatformUnsupported)
+}
+
+#[cfg(not(windows))]
+pub fn activate_first_g102_onboard_mode(
+    _protocol_trace: bool,
+) -> Result<OnboardModeWriteResult, HidppError> {
     Err(HidppError::PlatformUnsupported)
 }
 
@@ -368,6 +411,33 @@ fn read_onboard_profiles(
     let current = parameters(&current_response, 2)?;
 
     parse_onboard_profiles(description, mode, current)
+}
+
+fn read_onboard_mode(
+    transport: &mut impl Transport,
+    feature_index: u8,
+) -> Result<OnboardMode, HidppError> {
+    let response = request(transport, feature_index, 2, [0, 0, 0])?;
+    Ok(parameters(&response, 1)?[0].into())
+}
+
+fn set_onboard_mode(
+    transport: &mut impl Transport,
+    feature_index: u8,
+    mode: OnboardMode,
+) -> Result<(), HidppError> {
+    let value = match mode {
+        OnboardMode::NoChange => 0,
+        OnboardMode::Onboard => 1,
+        OnboardMode::Host => 2,
+        OnboardMode::Unknown(value) => {
+            return Err(HidppError::InvalidResponse(format!(
+                "拒绝设置未知板载模式 0x{value:02x}"
+            )));
+        }
+    };
+    request(transport, feature_index, 1, [value, 0, 0])?;
+    Ok(())
 }
 
 fn apply_office_buttons(transport: &mut impl Transport) -> Result<OnboardWriteResult, HidppError> {
@@ -1140,8 +1210,8 @@ mod tests {
         DpiSensorInfo, HidppError, OnboardButtonAction, OnboardMode, Transport,
         build_office_profile_sector, crc_ccitt, encode_onboard_button, g102_office_button_actions,
         parse_dpi_list, parse_onboard_profile, parse_onboard_profiles, request_long,
-        response_matches, set_sensor_dpi, validate_requested_dpi, validate_response,
-        write_onboard_sector,
+        response_matches, set_onboard_mode, set_sensor_dpi, validate_requested_dpi,
+        validate_response, write_onboard_sector,
     };
 
     const G102_FIXTURE: &str = include_str!("../tests/fixtures/g102-c092-release-5200.txt");
@@ -1244,6 +1314,16 @@ mod tests {
             transport.request,
             [0x10, 0xff, 0x0a, 0x38, 0x00, 0x03, 0x20]
         );
+    }
+
+    #[test]
+    fn encodes_activate_onboard_mode_as_function_one() {
+        let mut transport = RecordingTransport {
+            response: vec![0x10, 0xff, 0x0f, 0x18, 0x01, 0x00, 0x00],
+            request: Vec::new(),
+        };
+        set_onboard_mode(&mut transport, 0x0f, OnboardMode::Onboard).unwrap();
+        assert_eq!(transport.request, [0x10, 0xff, 0x0f, 0x18, 0x01, 0, 0]);
     }
 
     #[test]

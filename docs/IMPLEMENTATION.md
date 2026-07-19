@@ -687,6 +687,14 @@ DPI 键 G6。2026-07-20 确认的目标动作依次为：左键、右键、`Back
 没有删除服务或修改启动类型，`logi_lamparray_service` 保持运行。再次执行同一办公映射命令命中
 幂等检查并跳过闪存写入。此时运行态 DPI 读数为板载槽中的 `1800`，程序没有额外修改 DPI。
 
+首次现实按键测试发现，配置扇区虽然写入成功，但 `mode=Host` 时板载 G4/G5 动作没有生效。这证明
+“闪存内容已验证”与“当前设备正在使用板载配置”是两个独立状态。开发工具因此增加受保护的
+`--activate-onboard-mode --confirm-device-mode-change`：只对已验证的 `046d:c092 / release 0x5200`
+发送 `SET_ONBOARD_MODE (0x10)`，并使用 `GET_ONBOARD_MODE (0x20)` 强制回读；该操作与 DPI、板载
+闪存写入互斥。2026-07-20 实机从 `Host` 切换到 `Onboard` 成功，新会话确认 `mode=Onboard`、
+`current=1`，G4/G5 仍分别为 `Ctrl+V` 与 `Ctrl+C`。启用板载模式也会同时采用板载的
+`1800 DPI / 250 Hz`，不能把它视为仅切换按键的无副作用操作。
+
 ### 9.3 校验
 
 校验分两层：

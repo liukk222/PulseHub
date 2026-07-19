@@ -3,8 +3,8 @@ use std::process::ExitCode;
 
 use pulsehub_device::discovery::{HidCollectionInfo, enumerate_hid_collections};
 use pulsehub_device::hidpp::{
-    G102_BUTTON_NAMES, HidppProbeResult, OnboardButtonAction, apply_first_g102_office_buttons,
-    probe_first_g102, set_first_g102_dpi,
+    G102_BUTTON_NAMES, HidppProbeResult, OnboardButtonAction, activate_first_g102_onboard_mode,
+    apply_first_g102_office_buttons, probe_first_g102, set_first_g102_dpi,
 };
 
 fn main() -> ExitCode {
@@ -14,6 +14,8 @@ fn main() -> ExitCode {
     let mut confirm_device_write = false;
     let mut apply_office_buttons = false;
     let mut confirm_onboard_flash_write = false;
+    let mut activate_onboard_mode = false;
+    let mut confirm_device_mode_change = false;
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -22,6 +24,8 @@ fn main() -> ExitCode {
             "--confirm-device-write" => confirm_device_write = true,
             "--apply-office-buttons" => apply_office_buttons = true,
             "--confirm-onboard-flash-write" => confirm_onboard_flash_write = true,
+            "--activate-onboard-mode" => activate_onboard_mode = true,
+            "--confirm-device-mode-change" => confirm_device_mode_change = true,
             "--set-dpi" => {
                 let Some(value) = arguments.next() else {
                     eprintln!("--set-dpi 后必须提供 DPI 数值");
@@ -67,10 +71,22 @@ fn main() -> ExitCode {
         eprintln!("一次命令不能同时执行 DPI 写入和板载配置写入");
         return ExitCode::from(2);
     }
+    if activate_onboard_mode && !confirm_device_mode_change {
+        eprintln!("拒绝切换：--activate-onboard-mode 必须同时提供 --confirm-device-mode-change");
+        return ExitCode::from(2);
+    }
+    if !activate_onboard_mode && confirm_device_mode_change {
+        eprintln!("--confirm-device-mode-change 只能与 --activate-onboard-mode 一起使用");
+        return ExitCode::from(2);
+    }
+    if activate_onboard_mode && (requested_dpi.is_some() || apply_office_buttons) {
+        eprintln!("一次命令不能同时执行模式切换和其他设备写入");
+        return ExitCode::from(2);
+    }
 
     println!(
         "PulseHub HID {}",
-        if apply_office_buttons || requested_dpi.is_some() {
+        if apply_office_buttons || requested_dpi.is_some() || activate_onboard_mode {
             "受保护写入工具"
         } else {
             "只读探测"
@@ -84,7 +100,11 @@ fn main() -> ExitCode {
             "Logitech collection"
         }
     );
-    if apply_office_buttons {
+    if activate_onboard_mode {
+        println!(
+            "模式切换：已显式确认启用板载配置；板载 DPI、报告率和按键映射将成为当前设备行为。\n"
+        );
+    } else if apply_office_buttons {
         println!(
             "板载写入模式：已显式确认办公按键映射；将备份原扇区、写入、整扇区回读，失败时尝试恢复。\n"
         );
@@ -183,6 +203,20 @@ fn main() -> ExitCode {
         }
     }
 
+    if activate_onboard_mode {
+        println!("\n执行已确认的板载模式切换……");
+        match activate_first_g102_onboard_mode(protocol_trace) {
+            Ok(result) => println!(
+                "板载模式切换成功：写入前 {:?}，回读 {:?}。",
+                result.before, result.after
+            ),
+            Err(error) => {
+                eprintln!("板载模式切换失败：{error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
     ExitCode::SUCCESS
 }
 
@@ -241,7 +275,7 @@ fn display_serial(value: Option<&str>) -> &str {
 
 fn print_help() {
     println!(
-        "用法：pulsehub-probe [--all] [--protocol-trace] [--set-dpi <DPI> --confirm-device-write] [--apply-office-buttons --confirm-onboard-flash-write]"
+        "用法：pulsehub-probe [--all] [--protocol-trace] [--set-dpi <DPI> --confirm-device-write] [--apply-office-buttons --confirm-onboard-flash-write] [--activate-onboard-mode --confirm-device-mode-change]"
     );
     println!("  --all  枚举全部 HID collection；默认只显示 Logitech 设备");
     println!("  --protocol-trace  输出有上限的原始 HID++ 请求与响应");
@@ -249,6 +283,8 @@ fn print_help() {
     println!("  --confirm-device-write  显式确认本次 --set-dpi 写入");
     println!("  --apply-office-buttons  应用已验证的 G102 办公按键映射；单独使用时拒绝执行");
     println!("  --confirm-onboard-flash-write  显式确认本次板载闪存写入");
+    println!("  --activate-onboard-mode  启用板载配置；单独使用时拒绝执行");
+    println!("  --confirm-device-mode-change  显式确认板载模式切换");
 }
 
 fn print_hidpp_probe(result: &HidppProbeResult) {
