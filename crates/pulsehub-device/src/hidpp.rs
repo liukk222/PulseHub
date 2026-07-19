@@ -152,6 +152,13 @@ pub struct DpiWriteResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnboardWriteResult {
+    pub profile_sector: u16,
+    pub changed_buttons: Vec<usize>,
+    pub verified: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HidppError {
     PlatformUnsupported,
     InterfaceNotFound,
@@ -246,6 +253,20 @@ pub fn set_first_g102_dpi(
     })
 }
 
+#[cfg(windows)]
+pub fn apply_first_g102_office_buttons(
+    protocol_trace: bool,
+) -> Result<OnboardWriteResult, HidppError> {
+    let mut transport = WindowsHidppTransport::open(protocol_trace)?;
+    if transport.product_id != 0xc092 || transport.release_number != 0x5200 {
+        return Err(HidppError::InvalidResponse(format!(
+            "拒绝板载写入：仅验证过 046d:c092 release=5200，当前为 046d:{:04x} release={:04x}",
+            transport.product_id, transport.release_number
+        )));
+    }
+    apply_office_buttons(&mut transport)
+}
+
 #[cfg(not(windows))]
 pub fn probe_first_g102(_protocol_trace: bool) -> Result<HidppProbeResult, HidppError> {
     Err(HidppError::PlatformUnsupported)
@@ -256,6 +277,13 @@ pub fn set_first_g102_dpi(
     _requested: u16,
     _protocol_trace: bool,
 ) -> Result<DpiWriteResult, HidppError> {
+    Err(HidppError::PlatformUnsupported)
+}
+
+#[cfg(not(windows))]
+pub fn apply_first_g102_office_buttons(
+    _protocol_trace: bool,
+) -> Result<OnboardWriteResult, HidppError> {
     Err(HidppError::PlatformUnsupported)
 }
 
@@ -340,6 +368,194 @@ fn read_onboard_profiles(
     let current = parameters(&current_response, 2)?;
 
     parse_onboard_profiles(description, mode, current)
+}
+
+fn apply_office_buttons(transport: &mut impl Transport) -> Result<OnboardWriteResult, HidppError> {
+    let feature = get_feature(transport, ONBOARD_PROFILES_ID)?;
+    if feature.index == 0 {
+        return Err(HidppError::InvalidResponse(
+            "设备未公开 ONBOARD_PROFILES (0x8100)".to_owned(),
+        ));
+    }
+    let info = read_onboard_profiles(transport, feature.index)?;
+    if info.memory_model_id != 0x01
+        || info.profile_format_id != 0x04
+        || info.profile_count != 1
+        || info.button_count != 6
+        || info.sector_size != 255
+    {
+        return Err(HidppError::InvalidResponse(format!(
+            "拒绝板载写入：未验证的格式 memory=0x{:02x} profile=0x{:02x} profiles={} buttons={} sector_size={}",
+            info.memory_model_id,
+            info.profile_format_id,
+            info.profile_count,
+            info.button_count,
+            info.sector_size
+        )));
+    }
+
+    let directory = read_onboard_sector(transport, feature.index, 0, info.sector_size)?;
+    validate_sector_crc(&directory)?;
+    let profile_sector = u16::from_be_bytes([directory[0], directory[1]]);
+    if profile_sector == 0xffff || profile_sector >= u16::from(info.sector_count) {
+        return Err(HidppError::InvalidResponse(format!(
+            "拒绝板载写入：配置扇区地址 0x{profile_sector:04x} 无效"
+        )));
+    }
+
+    let original = read_onboard_sector(transport, feature.index, profile_sector, info.sector_size)?;
+    let (desired, changed_buttons) = build_office_profile_sector(&original, info.button_count)?;
+    if changed_buttons.is_empty() {
+        return Ok(OnboardWriteResult {
+            profile_sector,
+            changed_buttons,
+            verified: true,
+        });
+    }
+
+    if let Err(write_error) = write_onboard_sector(
+        transport,
+        feature.index,
+        profile_sector,
+        info.sector_size,
+        &desired,
+    ) {
+        let recovery = restore_onboard_sector(
+            transport,
+            feature.index,
+            profile_sector,
+            info.sector_size,
+            &original,
+        );
+        return Err(write_failure_with_recovery(write_error, recovery));
+    }
+
+    let readback =
+        match read_onboard_sector(transport, feature.index, profile_sector, info.sector_size) {
+            Ok(readback) => readback,
+            Err(read_error) => {
+                let recovery = restore_onboard_sector(
+                    transport,
+                    feature.index,
+                    profile_sector,
+                    info.sector_size,
+                    &original,
+                );
+                return Err(write_failure_with_recovery(read_error, recovery));
+            }
+        };
+    if readback != desired || validate_sector_crc(&readback).is_err() {
+        let recovery = restore_onboard_sector(
+            transport,
+            feature.index,
+            profile_sector,
+            info.sector_size,
+            &original,
+        );
+        return Err(write_failure_with_recovery(
+            HidppError::InvalidResponse("板载配置写后整扇区回读不一致".to_owned()),
+            recovery,
+        ));
+    }
+
+    Ok(OnboardWriteResult {
+        profile_sector,
+        changed_buttons,
+        verified: true,
+    })
+}
+
+fn build_office_profile_sector(
+    original: &[u8],
+    button_count: u8,
+) -> Result<(Vec<u8>, Vec<usize>), HidppError> {
+    validate_sector_crc(original)?;
+    if button_count != 6 || original.len() != 255 {
+        return Err(HidppError::InvalidResponse(
+            "办公映射只支持 6 按键、255 字节的已验证配置格式".to_owned(),
+        ));
+    }
+    let mut desired = original.to_vec();
+    let mut changed_buttons = Vec::new();
+    for (index, action) in g102_office_button_actions().iter().enumerate() {
+        let start = 32 + index * 4;
+        let encoded = encode_onboard_button(action)?;
+        if desired[start..start + 4] != encoded {
+            desired[start..start + 4].copy_from_slice(&encoded);
+            changed_buttons.push(index);
+        }
+    }
+    let payload_length = desired.len() - 2;
+    let crc = crc_ccitt(&desired[..payload_length]);
+    desired[payload_length..].copy_from_slice(&crc.to_be_bytes());
+    Ok((desired, changed_buttons))
+}
+
+fn write_onboard_sector(
+    transport: &mut impl Transport,
+    feature_index: u8,
+    sector: u16,
+    sector_size: u16,
+    data: &[u8],
+) -> Result<(), HidppError> {
+    if data.len() != usize::from(sector_size) {
+        return Err(HidppError::InvalidResponse(
+            "板载写入数据长度与扇区大小不一致".to_owned(),
+        ));
+    }
+    validate_sector_crc(data)?;
+
+    let mut start = [0_u8; 16];
+    start[0..2].copy_from_slice(&sector.to_be_bytes());
+    start[2..4].copy_from_slice(&0_u16.to_be_bytes());
+    start[4..6].copy_from_slice(&sector_size.to_be_bytes());
+    request_long(transport, feature_index, 6, start)?;
+
+    let mut padded = data.to_vec();
+    let transfer_size = data.len().next_multiple_of(16);
+    padded.resize(transfer_size, 0);
+    for chunk in padded.chunks_exact(16) {
+        let mut parameters = [0_u8; 16];
+        parameters.copy_from_slice(chunk);
+        if let Err(error) = request_long(transport, feature_index, 7, parameters) {
+            let _ = request(transport, feature_index, 8, [0, 0, 0]);
+            return Err(error);
+        }
+    }
+    request(transport, feature_index, 8, [0, 0, 0])?;
+    Ok(())
+}
+
+fn restore_onboard_sector(
+    transport: &mut impl Transport,
+    feature_index: u8,
+    sector: u16,
+    sector_size: u16,
+    original: &[u8],
+) -> Result<(), HidppError> {
+    write_onboard_sector(transport, feature_index, sector, sector_size, original)?;
+    let restored = read_onboard_sector(transport, feature_index, sector, sector_size)?;
+    if restored == original {
+        Ok(())
+    } else {
+        Err(HidppError::InvalidResponse(
+            "原配置恢复后回读不一致".to_owned(),
+        ))
+    }
+}
+
+fn write_failure_with_recovery(
+    write_error: HidppError,
+    recovery: Result<(), HidppError>,
+) -> HidppError {
+    match recovery {
+        Ok(()) => {
+            HidppError::InvalidResponse(format!("板载写入失败，已恢复并验证原配置：{write_error}"))
+        }
+        Err(recovery_error) => HidppError::InvalidResponse(format!(
+            "板载写入失败且原配置恢复未验证；写入错误：{write_error}；恢复错误：{recovery_error}"
+        )),
+    }
 }
 
 fn parse_onboard_profiles(
@@ -796,6 +1012,8 @@ fn response_matches(request: &[u8], response: &[u8]) -> bool {
 struct WindowsHidppTransport {
     short: hidapi::HidDevice,
     long: hidapi::HidDevice,
+    product_id: u16,
+    release_number: u16,
     trace: bool,
     traced_frames: usize,
 }
@@ -834,6 +1052,8 @@ impl WindowsHidppTransport {
         Ok(Self {
             short,
             long,
+            product_id: short_info.product_id(),
+            release_number: short_info.release_number(),
             trace,
             traced_frames: 0,
         })
@@ -917,10 +1137,11 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        DpiSensorInfo, HidppError, OnboardButtonAction, OnboardMode, Transport, crc_ccitt,
-        encode_onboard_button, g102_office_button_actions, parse_dpi_list, parse_onboard_profile,
-        parse_onboard_profiles, request_long, response_matches, set_sensor_dpi,
-        validate_requested_dpi, validate_response,
+        DpiSensorInfo, HidppError, OnboardButtonAction, OnboardMode, Transport,
+        build_office_profile_sector, crc_ccitt, encode_onboard_button, g102_office_button_actions,
+        parse_dpi_list, parse_onboard_profile, parse_onboard_profiles, request_long,
+        response_matches, set_sensor_dpi, validate_requested_dpi, validate_response,
+        write_onboard_sector,
     };
 
     const G102_FIXTURE: &str = include_str!("../tests/fixtures/g102-c092-release-5200.txt");
@@ -1104,6 +1325,59 @@ mod tests {
         assert!(encode_onboard_button(&OnboardButtonAction::Macro { page: 1, offset: 2 }).is_err());
     }
 
+    #[test]
+    fn patches_only_office_buttons_and_crc() {
+        let mut original = vec![0x5a_u8; 255];
+        let current = [
+            [0x80, 0x01, 0x00, 0x01],
+            [0x80, 0x01, 0x00, 0x02],
+            [0x80, 0x02, 0x00, 0xe1],
+            [0x80, 0x02, 0x01, 0x19],
+            [0x80, 0x02, 0x01, 0x06],
+            [0x80, 0x02, 0x00, 0x39],
+        ];
+        for (index, binding) in current.iter().enumerate() {
+            let start = 32 + index * 4;
+            original[start..start + 4].copy_from_slice(binding);
+        }
+        let payload_length = original.len() - 2;
+        let crc = crc_ccitt(&original[..payload_length]);
+        original[payload_length..].copy_from_slice(&crc.to_be_bytes());
+
+        let (desired, changed) = build_office_profile_sector(&original, 6).unwrap();
+        assert_eq!(changed, [2, 5]);
+        assert_eq!(&desired[40..44], &[0x80, 0x02, 0x00, 0x2a]);
+        assert_eq!(&desired[52..56], &[0x80, 0x02, 0x01, 0x04]);
+        assert_eq!(&desired[..32], &original[..32]);
+        assert_eq!(&desired[56..253], &original[56..253]);
+        assert_eq!(
+            u16::from_be_bytes([desired[253], desired[254]]),
+            crc_ccitt(&desired[..253])
+        );
+    }
+
+    #[test]
+    fn writes_255_byte_sector_with_guarded_transaction() {
+        let mut sector = vec![0_u8; 255];
+        let crc = crc_ccitt(&sector[..253]);
+        sector[253..].copy_from_slice(&crc.to_be_bytes());
+        let mut transport = EchoTransport::default();
+
+        write_onboard_sector(&mut transport, 0x0f, 1, 255, &sector).unwrap();
+
+        assert_eq!(transport.requests.len(), 18);
+        assert_eq!(transport.requests[0][3], 0x68);
+        assert_eq!(&transport.requests[0][4..10], &[0, 1, 0, 0, 0, 255]);
+        assert!(
+            transport.requests[1..17]
+                .iter()
+                .all(|request| request[0] == 0x11 && request[3] == 0x78)
+        );
+        assert_eq!(transport.requests[16][19], 0);
+        assert_eq!(transport.requests[17][0], 0x10);
+        assert_eq!(transport.requests[17][3], 0x88);
+    }
+
     fn fixture_frame(key: &str) -> Vec<u8> {
         let prefix = format!("{key}=");
         G102_FIXTURE
@@ -1124,6 +1398,18 @@ mod tests {
         fn transact(&mut self, request: &[u8], _timeout: Duration) -> Result<Vec<u8>, HidppError> {
             self.request = request.to_vec();
             Ok(self.response.clone())
+        }
+    }
+
+    #[derive(Default)]
+    struct EchoTransport {
+        requests: Vec<Vec<u8>>,
+    }
+
+    impl Transport for EchoTransport {
+        fn transact(&mut self, request: &[u8], _timeout: Duration) -> Result<Vec<u8>, HidppError> {
+            self.requests.push(request.to_vec());
+            Ok(request.to_vec())
         }
     }
 }

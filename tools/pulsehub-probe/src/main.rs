@@ -3,7 +3,8 @@ use std::process::ExitCode;
 
 use pulsehub_device::discovery::{HidCollectionInfo, enumerate_hid_collections};
 use pulsehub_device::hidpp::{
-    G102_BUTTON_NAMES, HidppProbeResult, OnboardButtonAction, probe_first_g102, set_first_g102_dpi,
+    G102_BUTTON_NAMES, HidppProbeResult, OnboardButtonAction, apply_first_g102_office_buttons,
+    probe_first_g102, set_first_g102_dpi,
 };
 
 fn main() -> ExitCode {
@@ -11,12 +12,16 @@ fn main() -> ExitCode {
     let mut protocol_trace = false;
     let mut requested_dpi = None;
     let mut confirm_device_write = false;
+    let mut apply_office_buttons = false;
+    let mut confirm_onboard_flash_write = false;
     let mut arguments = env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--all" => include_all = true,
             "--protocol-trace" => protocol_trace = true,
             "--confirm-device-write" => confirm_device_write = true,
+            "--apply-office-buttons" => apply_office_buttons = true,
+            "--confirm-onboard-flash-write" => confirm_onboard_flash_write = true,
             "--set-dpi" => {
                 let Some(value) = arguments.next() else {
                     eprintln!("--set-dpi 后必须提供 DPI 数值");
@@ -50,8 +55,27 @@ fn main() -> ExitCode {
         eprintln!("--confirm-device-write 只能与 --set-dpi 一起使用");
         return ExitCode::from(2);
     }
+    if apply_office_buttons && !confirm_onboard_flash_write {
+        eprintln!("拒绝写入：--apply-office-buttons 必须同时提供 --confirm-onboard-flash-write");
+        return ExitCode::from(2);
+    }
+    if !apply_office_buttons && confirm_onboard_flash_write {
+        eprintln!("--confirm-onboard-flash-write 只能与 --apply-office-buttons 一起使用");
+        return ExitCode::from(2);
+    }
+    if requested_dpi.is_some() && apply_office_buttons {
+        eprintln!("一次命令不能同时执行 DPI 写入和板载配置写入");
+        return ExitCode::from(2);
+    }
 
-    println!("PulseHub HID 只读探测");
+    println!(
+        "PulseHub HID {}",
+        if apply_office_buttons || requested_dpi.is_some() {
+            "受保护写入工具"
+        } else {
+            "只读探测"
+        }
+    );
     println!(
         "模式：{}",
         if include_all {
@@ -60,7 +84,11 @@ fn main() -> ExitCode {
             "Logitech collection"
         }
     );
-    if let Some(dpi) = requested_dpi {
+    if apply_office_buttons {
+        println!(
+            "板载写入模式：已显式确认办公按键映射；将备份原扇区、写入、整扇区回读，失败时尝试恢复。\n"
+        );
+    } else if let Some(dpi) = requested_dpi {
         println!("写入模式：已显式请求将 DPI 设置为 {dpi}，完成后执行回读校验。\n");
     } else {
         println!("安全性：本工具仅枚举设备并执行 HID++ 查询，不发送配置写入。\n");
@@ -118,6 +146,38 @@ fn main() -> ExitCode {
             ),
             Err(error) => {
                 eprintln!("DPI 写入失败：{error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    if apply_office_buttons {
+        println!("\n执行已确认的板载办公按键写入……");
+        match apply_first_g102_office_buttons(protocol_trace) {
+            Ok(result) => {
+                let names = result
+                    .changed_buttons
+                    .iter()
+                    .filter_map(|index| G102_BUTTON_NAMES.get(*index))
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .join("、");
+                if result.changed_buttons.is_empty() {
+                    println!(
+                        "板载办公映射已经一致：sector=0x{:04x}，未重复写入闪存。",
+                        result.profile_sector
+                    );
+                } else {
+                    println!(
+                        "板载办公映射写入成功：sector=0x{:04x}，修改={}，整扇区回读={}。",
+                        result.profile_sector,
+                        names,
+                        if result.verified { "通过" } else { "失败" }
+                    );
+                }
+            }
+            Err(error) => {
+                eprintln!("板载办公映射写入失败：{error}");
                 return ExitCode::FAILURE;
             }
         }
@@ -181,12 +241,14 @@ fn display_serial(value: Option<&str>) -> &str {
 
 fn print_help() {
     println!(
-        "用法：pulsehub-probe [--all] [--protocol-trace] [--set-dpi <DPI> --confirm-device-write]"
+        "用法：pulsehub-probe [--all] [--protocol-trace] [--set-dpi <DPI> --confirm-device-write] [--apply-office-buttons --confirm-onboard-flash-write]"
     );
     println!("  --all  枚举全部 HID collection；默认只显示 Logitech 设备");
     println!("  --protocol-trace  输出有上限的原始 HID++ 请求与响应");
     println!("  --set-dpi <DPI>  设置真实硬件 DPI；单独使用时拒绝执行");
     println!("  --confirm-device-write  显式确认本次 --set-dpi 写入");
+    println!("  --apply-office-buttons  应用已验证的 G102 办公按键映射；单独使用时拒绝执行");
+    println!("  --confirm-onboard-flash-write  显式确认本次板载闪存写入");
 }
 
 fn print_hidpp_probe(result: &HidppProbeResult) {

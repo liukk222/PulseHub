@@ -665,6 +665,28 @@ DPI 键 G6。2026-07-20 确认的目标动作依次为：左键、右键、`Back
 `Ctrl+A`。键盘动作使用 HID Keyboard Usage：`Backspace=0x2A`、`A=0x04`、`C=0x06`、`V=0x19`，
 左 Ctrl modifier 为 `0x01`。配置层必须保留 modifier，不能把组合键表示成宏。
 
+受保护的开发工具写入必须同时指定 `--apply-office-buttons` 和
+`--confirm-onboard-flash-write`，并且不能在同一次执行中混入 DPI 写入。实现仅接受已经实机验证的
+`046d:c092 / release 0x5200 / memory format 0x01 / profile format 0x04 / 6 buttons / 255 B`；
+任一身份或格式字段不匹配都在首个写命令之前拒绝。事务流程如下：
+
+1. 读取目录与原配置扇区并校验 CRC，将原扇区保留在内存中。
+2. 只替换偏移 `32..56` 内的六个四字节按键绑定，其他字段保持原样，并重新计算尾部 CRC-CCITT。
+3. 发送 `MEMORY_ADDR_WRITE (0x60)`、16 个 `MEMORY_WRITE (0x70)` 长报告和
+   `MEMORY_WRITE_END (0x80)`；声明长度为 255 字节，最后一个传输块的第 256 字节补零。
+4. 重新读取整个 255 字节扇区，要求逐字节相同且 CRC 有效；失败时写回原扇区并再次完整回读。
+5. 目标内容已一致时返回成功但不重复写闪存。
+
+2026-07-20 的首次实机事务只改变槽位 2（中键）和槽位 5（DPI G6），整扇区写后回读通过；随后
+使用新 HID++ 会话再次读取，确认中键为 `Backspace`、DPI G6 为 `Ctrl+A`，左/右键和 G4/G5 未变。
+写入前临时停止的 `LGHUBUpdaterService` 与 `logi_lamparray_service` 已在 `finally` 中恢复为原来的
+运行状态，未修改其自动启动设置。设备仍处于 `Host` 模式；板载内容持久化成功不等同于已经完成
+办公/CS2 高频自动切换方案，后者仍禁止在每次前台切换时提交闪存。
+
+首次验证完成后，按用户要求再次停止 `LGHUBUpdaterService`，最终状态为 `Stopped / Automatic`；
+没有删除服务或修改启动类型，`logi_lamparray_service` 保持运行。再次执行同一办公映射命令命中
+幂等检查并跳过闪存写入。此时运行态 DPI 读数为板载槽中的 `1800`，程序没有额外修改 DPI。
+
 ### 9.3 校验
 
 校验分两层：
