@@ -14,6 +14,8 @@ pulsehub-profile = { path = "../../crates/pulsehub-profile" }
 
 [target.'cfg(windows)'.dependencies]
 active-win-pos-rs = "0.11.0"
+ctrlc = "3.5.2"
+win_event_hook = "0.4.2"
 
 [lints]
 workspace = true

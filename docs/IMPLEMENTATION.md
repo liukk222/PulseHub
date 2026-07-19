@@ -413,6 +413,17 @@ DPI。2026-07-20 实机识别前台 `ChatGPT.exe` 为 Office，目标为 `1800 D
 去重，并支持在设备重连/恢复时失效。常驻 `EVENT_SYSTEM_FOREGROUND` hook 与消息合并尚未接入，
 不能把当前一次性命令描述为已经实现自动切换。
 
+后续实现已使用安全封装的 `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` 接入常驻监听。hook 在专用消息
+线程运行，回调只向容量为 1 的通道执行 `try_send`；工作线程收到通知后等待 75 ms 并排空重复通知，
+再读取最新前台进程。`EnvironmentTracker` 继续过滤映射到同一环境的窗口变化，设备层在当前 DPI
+已一致时不发送写命令。`Ctrl+C` 或验证时限到期会显式卸载 hook。开发命令必须同时提供
+`--watch-foreground --confirm-device-write`，可选 `--exit-after-seconds 1..3600`；整个路径只调用
+`ADJUSTABLE_DPI` 运行时功能，不调用板载内存写入。
+
+2026-07-20 的 3 秒 Windows 实机验证完成了 hook 安装、`ChatGPT.exe → Office` 初始选择、1800 DPI
+幂等跳过、到期停止和 hook 卸载。由于验证期间未启动 `cs2.exe`，Office→CS2→Office 的真实事件、
+800/1800 DPI 回读和快速 Alt+Tab 合并仍属于待验收项。
+
 ### 7.2 切换流程
 
 ~~~mermaid
