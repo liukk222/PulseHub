@@ -1,0 +1,14 @@
+[package]
+name = "pulsehub-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+pulsehub-core = { path = "../../crates/pulsehub-core" }
+pulsehub-ipc = { path = "../../crates/pulsehub-ipc" }
+
+[lints]
+workspace = true
+

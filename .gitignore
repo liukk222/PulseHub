@@ -1,0 +1,12 @@
+/target/
+.snow/
+*.pdb
+*.exe
+*.dll
+.idea/
+.vscode/
+
+# PulseHub 用户数据与诊断输出
+config.toml
+config.toml.bak
+logs/

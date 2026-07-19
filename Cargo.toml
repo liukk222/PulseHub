@@ -1,0 +1,29 @@
+[workspace]
+members = [
+    "apps/pulsehub-agent",
+    "apps/pulsehub-config",
+    "crates/pulsehub-config-store",
+    "crates/pulsehub-core",
+    "crates/pulsehub-device",
+    "crates/pulsehub-ipc",
+    "crates/pulsehub-profile",
+    "tools/pulsehub-probe",
+]
+default-members = [
+    "apps/pulsehub-agent",
+    "apps/pulsehub-config",
+    "tools/pulsehub-probe",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+authors = ["PulseHub contributors"]
+license = "UNLICENSED"
+repository = "https://github.com/liukk222/PulseHub"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+

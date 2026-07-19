@@ -1,0 +1,17 @@
+[package]
+name = "pulsehub-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+pulsehub-config-store = { path = "../../crates/pulsehub-config-store" }
+pulsehub-core = { path = "../../crates/pulsehub-core" }
+pulsehub-device = { path = "../../crates/pulsehub-device" }
+pulsehub-ipc = { path = "../../crates/pulsehub-ipc" }
+pulsehub-profile = { path = "../../crates/pulsehub-profile" }
+
+[lints]
+workspace = true
+
