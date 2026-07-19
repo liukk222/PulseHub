@@ -284,6 +284,11 @@ pub trait HidTransport {
 - 同目录临时文件写入、落盘和原子替换。
 - 主文件损坏时读取备份并报告恢复事件。
 
+阶段 3 当前实现使用 `serde`/`toml` 严格解析 schema v1，并拒绝未知字段；校验覆盖必需的 Office/CS2
+配置、自动选择进程规则、重复物理控制、Keyboard HID Usage 和左/右主点击保护。默认配置为 Office
+`1800 DPI`、CS2 `800 DPI`，两者共用已经验证的板载办公按键映射，因此环境切换不会反复提交
+按键闪存。`pulsehub-agent` 首次运行已在 `%APPDATA%\PulseHub\config.toml` 创建并重新加载该配置。
+
 ### 5.5 `pulsehub-ipc`
 
 负责：
@@ -695,6 +700,10 @@ DPI 键 G6。2026-07-20 确认的目标动作依次为：左键、右键、`Back
 `current=1`，G4/G5 仍分别为 `Ctrl+V` 与 `Ctrl+C`。启用板载模式也会同时采用板载的
 `1800 DPI / 250 Hz`，不能把它视为仅切换按键的无副作用操作。
 
+用户随后在真实办公应用中确认侧后 G4 的 `Ctrl+V` 与侧前 G5 的 `Ctrl+C` 均正常触发，证明
+profile format `0x04` 的槽位顺序、Keyboard HID Usage 和左 Ctrl modifier 编码正确。中键
+`Backspace` 与 DPI G6 `Ctrl+A` 尚未完成同等级现实验收，不能仅凭协议回读标记为通过。
+
 ### 9.3 校验
 
 校验分两层：
@@ -711,7 +720,9 @@ DPI 键 G6。2026-07-20 确认的目标动作依次为：左键、右键、`Back
 1. 校验传入的 `base_revision`，防止多个 GUI 覆盖新配置。
 2. 序列化到同一目录的临时文件。
 3. 对临时文件调用 `FlushFileBuffers` 并关闭句柄。
-4. 主文件存在时，一次调用 `ReplaceFileW(main, temp, backup, ...)`，让替换操作同时生成 `config.toml.bak`；不能先移走主文件。
+4. 当前实现先复制仍有效的主文件为 `config.toml.bak`，再使用同目录 `NamedTempFile::persist` 原子替换
+   主文件；替换前不移走或删除主文件。发布加固阶段可改用一次 `ReplaceFileW(main, temp, backup, ...)`
+   同时完成替换和备份。
 5. 首次保存时目标文件不存在，使用同卷的 `MoveFileExW(temp, main, MOVEFILE_WRITE_THROUGH)`。
 6. 失败时保留并重新校验主文件与备份，清理仍存在的临时文件；不能把未知的中间状态当成保存成功。
 7. 成功后增加 `config_revision`，再触发系统集成和设备应用。

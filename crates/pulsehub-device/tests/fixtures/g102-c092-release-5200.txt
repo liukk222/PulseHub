@@ -20,3 +20,4 @@ onboard_profile_crc=valid
 onboard_profile_sector=0001
 onboard_profile_summary=enabled:true,report_rate_hz:250,dpi_slots:1800,buttons:6
 onboard_office_buttons=left,right,backspace,ctrl_v,ctrl_c,ctrl_a
+onboard_real_test=side_back_ctrl_v:pass,side_forward_ctrl_c:pass

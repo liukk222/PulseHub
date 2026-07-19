@@ -7,7 +7,9 @@ publish = false
 
 [dependencies]
 pulsehub-core = { path = "../pulsehub-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+tempfile = "3.27.0"
+toml = "1.1.3"
 
 [lints]
 workspace = true
-
