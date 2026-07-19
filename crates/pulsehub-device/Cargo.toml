@@ -8,6 +8,8 @@ publish = false
 [dependencies]
 pulsehub-core = { path = "../pulsehub-core" }
 
+[target.'cfg(windows)'.dependencies]
+hidapi = { version = "2.6.6", default-features = false, features = ["windows-native"] }
+
 [lints]
 workspace = true
-

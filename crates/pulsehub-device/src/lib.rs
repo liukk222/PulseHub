@@ -4,6 +4,8 @@ use std::fmt;
 
 use pulsehub_core::{DeviceCapabilities, DeviceIdentity, Profile};
 
+pub mod discovery;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceState {
     pub current_dpi: Option<u16>,

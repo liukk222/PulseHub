@@ -461,6 +461,13 @@ Logitech 官方产品页列出 G102 LIGHTSYNC 的 `200–8,000 DPI` 和 6 个可
 | `REPROG_CONTROLS_V4 0x1B04` | 开源 HID++ 实现使用 | 待确认是否支持运行时按键映射 |
 | `ONBOARD_PROFILES 0x8100` | 开源 HID++ 实现使用 | 待确认配置数、写入语义和持久性 |
 
+2026-07-19 的阶段 0 实机只读探测已确认首台目标设备为 `046d:c092`、release `0x5200`、产品名
+`G102 LIGHTSYNC Gaming Mouse`。该设备暴露 6 个物理 USB HID collection，其中包括
+`Usage Page 0xFF00 / Usage 0x0001` 的 7 字节输入/输出报告和
+`Usage Page 0xFF00 / Usage 0x0002` 的 20 字节输入/输出报告；这两个 collection 是后续 HID++
+短/长报文握手的候选接口。当前结论仅来自描述符读取，尚未执行 HID++ 根功能查询，也未验证 DPI、
+按键或板载配置能力。探测输出默认隐藏序列号，fixture 不得保存设备路径或原始序列号。
+
 HID++ 功能索引由设备运行时分配。代码可固定查询功能 ID，但绝不能把某次设备返回的 feature index 固定写死。
 
 ### 8.2 设备发现
