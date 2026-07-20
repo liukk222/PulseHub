@@ -22,6 +22,7 @@ struct Arguments {
     inspect_foreground: bool,
     apply_current_environment: bool,
     watch_foreground: bool,
+    serve_ipc_once: bool,
     confirm_device_write: bool,
     exit_after_seconds: Option<u64>,
 }
@@ -88,12 +89,60 @@ fn main() -> ExitCode {
 
     if arguments.watch_foreground {
         run_watcher(&config, arguments.exit_after_seconds)
+    } else if arguments.serve_ipc_once {
+        serve_ipc_once(&config)
     } else if arguments.inspect_foreground || arguments.apply_current_environment {
         inspect_or_apply(&config, arguments.apply_current_environment)
     } else {
         println!("未请求设备操作；使用 --help 查看前台识别与自动切换参数。");
         ExitCode::SUCCESS
     }
+}
+
+#[cfg(windows)]
+fn serve_ipc_once(config: &ConfigDocument) -> ExitCode {
+    use pulsehub_ipc::windows::{DEFAULT_PIPE_PATH, Server};
+
+    let target = match resolve_target(config) {
+        Ok(target) => target,
+        Err(error) => {
+            eprintln!("IPC 快照构造失败：{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let snapshot = snapshot_for_target(&target, 0, DeviceStatus::Unknown, None);
+    let server = match Server::bind(DEFAULT_PIPE_PATH) {
+        Ok(server) => server,
+        Err(error) => {
+            eprintln!("IPC 管道创建失败：{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("IPC 单连接验证服务已启动：{DEFAULT_PIPE_PATH}");
+    println!("仅提供脱敏快照，不读取或写入 HID；等待 pulsehub-config 客户端……");
+    let mut stream = match server.accept() {
+        Ok(stream) => stream,
+        Err(error) => {
+            eprintln!("IPC 客户端连接失败：{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match server.serve_connection(&mut stream, &snapshot) {
+        Ok(()) => {
+            println!("IPC 客户端已断开，单连接验证服务停止。");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("IPC 会话失败：{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn serve_ipc_once(_: &ConfigDocument) -> ExitCode {
+    eprintln!("IPC Named Pipe 验证模式仅支持 Windows。");
+    ExitCode::FAILURE
 }
 
 fn inspect_or_apply(config: &ConfigDocument, apply: bool) -> ExitCode {
@@ -271,6 +320,7 @@ fn parse_arguments() -> Result<Arguments, String> {
             "--inspect-foreground" => parsed.inspect_foreground = true,
             "--apply-current-environment" => parsed.apply_current_environment = true,
             "--watch-foreground" => parsed.watch_foreground = true,
+            "--serve-ipc-once" => parsed.serve_ipc_once = true,
             "--confirm-device-write" => parsed.confirm_device_write = true,
             "--exit-after-seconds" => {
                 let value = arguments
@@ -293,7 +343,8 @@ fn parse_arguments() -> Result<Arguments, String> {
     }
     let modes = u8::from(parsed.inspect_foreground)
         + u8::from(parsed.apply_current_environment)
-        + u8::from(parsed.watch_foreground);
+        + u8::from(parsed.watch_foreground)
+        + u8::from(parsed.serve_ipc_once);
     if modes > 1 {
         return Err("前台检查、单次应用和自动监听模式不能同时使用".to_owned());
     }
@@ -313,9 +364,11 @@ fn print_help() {
     println!(
         "      pulsehub-agent --watch-foreground --confirm-device-write [--exit-after-seconds <1-3600>]"
     );
+    println!("      pulsehub-agent --serve-ipc-once");
     println!("  --inspect-foreground  只读显示前台进程、目标环境和 DPI");
     println!("  --apply-current-environment  按当前前台进程应用一次运行态 DPI");
     println!("  --watch-foreground  监听 Windows 前台事件并自动切换运行态 DPI");
+    println!("  --serve-ipc-once  只读服务一个 IPC 客户端，断开后退出");
     println!("  --confirm-device-write  显式确认本次进程中的 DPI 设备写入");
     println!("  --exit-after-seconds  验证用的自动退出时间；省略时按 Ctrl+C 退出");
 }

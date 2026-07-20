@@ -9,7 +9,7 @@
 
 PulseHub 是一个使用 Rust 开发的轻量鼠标配置程序。第一阶段面向 Logitech G102 LIGHTSYNC，提供真实硬件 DPI 设置、鼠标按键分配，以及“办公”和“CS2”两套配置的自动切换。
 
-当前工作区已初始化 Cargo Workspace，并包含领域模型、设备接口、配置切换、配置存储、IPC 与三个可执行入口；Windows HID 枚举、HID++ 功能发现、DPI 读写和板载配置只读解析已经通过 G102 实机验证。IPC v1 的 DTO、版本协商、长度前缀帧和 Windows Named Pipe 字节流传输已经实现。当前管道使用受保护的 owner-only DACL 并拒绝远程客户端，精确 logon SID 命名与代理常驻监听尚未接入。Win32 托盘、Slint GUI 以及通用按键写入仍未实现。因此，本文同时记录已验证实现与后续编码基线；未明确标为实机验证的性能数字和协议细节仍属于待验证目标。
+当前工作区已初始化 Cargo Workspace，并包含领域模型、设备接口、配置切换、配置存储、IPC 与三个可执行入口；Windows HID 枚举、HID++ 功能发现、DPI 读写和板载配置只读解析已经通过 G102 实机验证。IPC v1 的 DTO、版本协商、长度前缀帧和 Windows Named Pipe 字节流传输已经实现，代理与配置端已完成真实跨进程只读快照验证。当前管道使用受保护的 owner-only DACL 并拒绝远程客户端，精确 logon SID 命名与代理常驻监听尚未接入。Win32 托盘、Slint GUI 以及通用按键写入仍未实现。因此，本文同时记录已验证实现与后续编码基线；未明确标为实机验证的性能数字和协议细节仍属于待验证目标。
 
 本文使用以下状态词：
 
@@ -818,6 +818,17 @@ payload_length bytes UTF-8 JSON
 超长帧、非法 UTF-8/JSON、未知字段/消息类型、版本不匹配以及响应信封不变量。Windows Named
 Pipe 帧传输和单连接会话已实现；代理常驻 accept 循环、并发客户端上限、当前 logon SID
 命名和关机协调是下一实现单元。
+
+开发期可在两个 PowerShell 终端执行以下只读端到端验证；代理服务一个客户端后退出，不打开 HID：
+
+~~~powershell
+cargo run -p pulsehub-agent -- --serve-ipc-once
+cargo run -p pulsehub-config -- --inspect-agent
+~~~
+
+已验证输出能够从实际 `%APPDATA%\PulseHub\config.toml` 解析当前前台目标，并经 `hello` 与
+`get_snapshot` 返回脱敏快照。设备尚未查询时必须返回 `device_status = unknown` 和
+`current_dpi = null`，不得把目标 DPI 伪装成硬件当前值。
 
 首次连接先完成版本协商：
 
