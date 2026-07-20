@@ -20,10 +20,11 @@ export component AppWindow inherits Window {
     in property <string> current-dpi: "—";
     in property <string> desired-dpi: "—";
     in property <string> revision: "—";
+    in-out property <int> base-revision: 0;
     in property <string> save-title: "正在读取配置";
     in property <string> save-detail: "连接代理后将显示保存和应用状态。";
     callback refresh-requested();
-    callback save-requested(int, int);
+    callback save-requested(int, int, int);
     callback discard-requested();
 
     VerticalLayout {
@@ -64,7 +65,7 @@ export component AppWindow inherits Window {
                 VerticalLayout { Text { text: "有未保存的更改"; color: Theme.ink; font-size: 14px; font-weight: 600; } Text { text: "保存后才会发送给代理；应用状态将单独更新。"; color: Theme.muted; font-size: 12px; } }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
                 Button { text: "放弃更改"; enabled: !root.busy; clicked => { root.discard-requested(); } }
-                Button { text: root.busy ? "正在保存" : "保存配置"; primary: true; enabled: !root.busy; clicked => { root.save-requested(root.office-dpi, root.cs2-dpi); } }
+                Button { text: root.busy ? "正在保存" : "保存配置"; primary: true; enabled: !root.busy; clicked => { root.save-requested(root.office-dpi, root.cs2-dpi, root.base-revision); } }
             }
         }
     }

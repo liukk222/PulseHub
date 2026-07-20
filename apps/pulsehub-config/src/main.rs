@@ -49,10 +49,19 @@ fn run_gui() -> ExitCode {
     };
 
     let refresh_ui = ui.as_weak();
-    ui.on_refresh_requested(move || refresh_gui(refresh_ui.clone()));
+    ui.on_refresh_requested(move || {
+        if let Some(ui) = refresh_ui.upgrade()
+            && ui.get_draft_dirty()
+        {
+            ui.set_save_title("有未保存的更改".into());
+            ui.set_save_detail("请先保存或放弃更改，再刷新代理状态。".into());
+            return;
+        }
+        refresh_gui(refresh_ui.clone());
+    });
 
     let save_ui = ui.as_weak();
-    ui.on_save_requested(move |office_dpi, cs2_dpi| {
+    ui.on_save_requested(move |office_dpi, cs2_dpi, base_revision| {
         if let Some(ui) = save_ui.upgrade() {
             ui.set_busy(true);
             ui.set_save_title("正在检查配置".into());
@@ -60,7 +69,7 @@ fn run_gui() -> ExitCode {
         }
         let worker_ui = save_ui.clone();
         std::thread::spawn(move || {
-            let result = save_gui_config(office_dpi as u16, cs2_dpi as u16);
+            let result = save_gui_config(office_dpi as u16, cs2_dpi as u16, base_revision as u64);
             let _ = slint::invoke_from_event_loop(move || match result {
                 Ok((snapshot, config)) => {
                     if let Some(ui) = worker_ui.upgrade() {
@@ -71,6 +80,7 @@ fn run_gui() -> ExitCode {
                         ui.set_save_detail("配置文件已经更新；设备应用状态由代理独立管理。".into());
                     }
                 }
+                Err(error) if is_revision_conflict(&error) => show_gui_conflict(&worker_ui),
                 Err(error) => show_gui_error(&worker_ui, "未能保存配置", &error),
             });
         });
@@ -86,6 +96,16 @@ fn run_gui() -> ExitCode {
             eprintln!("PulseHub UI 运行失败：{error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(windows)]
+fn show_gui_conflict(ui: &slint::Weak<AppWindow>) {
+    if let Some(window) = ui.upgrade() {
+        window.set_busy(false);
+        window.set_save_title("配置已在其他窗口更新".into());
+        window
+            .set_save_detail("当前草稿基于旧版本。为避免覆盖新配置，请放弃更改并重新载入。".into());
     }
 }
 
@@ -159,6 +179,7 @@ fn apply_gui_state(
     );
     ui.set_desired_dpi(snapshot.desired_dpi.to_string().into());
     ui.set_revision(snapshot.config_revision.to_string().into());
+    ui.set_base_revision(snapshot.config_revision.try_into().unwrap_or(i32::MAX));
     let dpi_values = snapshot
         .dpi_capability
         .as_ref()
@@ -206,6 +227,7 @@ fn load_gui_state() -> Result<(AgentSnapshot, pulsehub_config_store::ConfigDocum
 fn save_gui_config(
     office_dpi: u16,
     cs2_dpi: u16,
+    base_revision: u64,
 ) -> Result<(AgentSnapshot, pulsehub_config_store::ConfigDocument), String> {
     use pulsehub_ipc::windows::{connect_with_retry, default_pipe_path};
 
@@ -222,7 +244,6 @@ fn save_gui_config(
     )
     .map_err(|error| error.to_string())?;
     negotiate(&mut stream)?;
-    let before = request_snapshot_on(&mut stream, "gui-before-save")?;
     exchange(
         &mut stream,
         &Request::ValidateDraft {
@@ -236,7 +257,7 @@ fn save_gui_config(
         &Request::CommitConfig {
             version: PROTOCOL_VERSION,
             request_id: "gui-commit".into(),
-            base_revision: before.config_revision,
+            base_revision,
             draft,
         },
     )?;
@@ -245,6 +266,10 @@ fn save_gui_config(
         .and_then(|data| serde_json::from_value(data).ok())
         .ok_or_else(|| "代理返回的提交快照无效".to_owned())?;
     Ok((snapshot, config))
+}
+
+fn is_revision_conflict(error: &str) -> bool {
+    error.contains("PH-IPC-CONFLICT")
 }
 
 #[cfg(windows)]
@@ -484,4 +509,15 @@ fn print_help() {
     println!("  --apply-agent  请求代理应用当前前台环境并返回回读快照");
     println!("  --validate-current-config  请求代理验证磁盘上的当前配置，不保存");
     println!("  --commit-current-config  按代理当前修订提交磁盘上的配置，不自动写 HID");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_revision_conflict;
+
+    #[test]
+    fn recognizes_revision_conflict_without_matching_other_errors() {
+        assert!(is_revision_conflict("\"PH-IPC-CONFLICT\"：配置修订冲突"));
+        assert!(!is_revision_conflict("\"PH-IPC-BUSY\"：设备协调者响应超时"));
+    }
 }
