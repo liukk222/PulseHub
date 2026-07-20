@@ -17,6 +17,7 @@ enum AgentAction {
     Apply,
     ValidateCurrentConfig,
     CommitCurrentConfig,
+    SetSelectionMode(pulsehub_ipc::SelectionMode),
 }
 
 fn main() -> ExitCode {
@@ -25,6 +26,15 @@ fn main() -> ExitCode {
         Some("--apply-agent") => run_agent_action(AgentAction::Apply),
         Some("--validate-current-config") => run_agent_action(AgentAction::ValidateCurrentConfig),
         Some("--commit-current-config") => run_agent_action(AgentAction::CommitCurrentConfig),
+        Some("--set-selection-auto") => run_agent_action(AgentAction::SetSelectionMode(
+            pulsehub_ipc::SelectionMode::Auto,
+        )),
+        Some("--set-selection-office") => run_agent_action(AgentAction::SetSelectionMode(
+            pulsehub_ipc::SelectionMode::Office,
+        )),
+        Some("--set-selection-cs2") => run_agent_action(AgentAction::SetSelectionMode(
+            pulsehub_ipc::SelectionMode::Cs2,
+        )),
         Some("-h" | "--help") => {
             print_help();
             ExitCode::SUCCESS
@@ -655,6 +665,11 @@ fn run_agent_action(action: AgentAction) -> ExitCode {
             base_revision,
             draft: draft.expect("提交操作必须加载草稿"),
         },
+        AgentAction::SetSelectionMode(mode) => Request::SetSelectionMode {
+            version: PROTOCOL_VERSION,
+            request_id: "config-set-selection-1".to_owned(),
+            mode,
+        },
     };
     let response = match exchange(&mut stream, &request) {
         Ok(response) => response,
@@ -683,6 +698,7 @@ fn run_agent_action(action: AgentAction) -> ExitCode {
         match action {
             AgentAction::Apply => "应用完成",
             AgentAction::CommitCurrentConfig => "配置提交完成",
+            AgentAction::SetSelectionMode(_) => "环境模式更新完成",
             _ => "代理快照",
         },
         snapshot.device_status,
@@ -739,6 +755,9 @@ fn print_help() {
     println!("  --apply-agent  请求代理应用当前前台环境并返回回读快照");
     println!("  --validate-current-config  请求代理验证磁盘上的当前配置，不保存");
     println!("  --commit-current-config  按代理当前修订提交磁盘上的配置，不自动写 HID");
+    println!("  --set-selection-auto  将环境选择保存为自动");
+    println!("  --set-selection-office  将环境选择保存为固定 Office");
+    println!("  --set-selection-cs2  将环境选择保存为固定 CS2");
 }
 
 #[cfg(test)]

@@ -71,6 +71,10 @@ enum DeviceCommand {
         draft: serde_json::Value,
         reply: std::sync::mpsc::SyncSender<Result<serde_json::Value, CommandFailure>>,
     },
+    SetSelectionMode {
+        mode: pulsehub_ipc::SelectionMode,
+        reply: std::sync::mpsc::SyncSender<Result<serde_json::Value, CommandFailure>>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -236,6 +240,9 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                                     draft: draft.clone(),
                                     reply,
                                 },
+                                Request::SetSelectionMode { mode, .. } => {
+                                    DeviceCommand::SetSelectionMode { mode: *mode, reply }
+                                }
                                 _ => return None,
                             };
                             match command_tx.try_send(command) {
@@ -447,6 +454,57 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                             let current = AgentSnapshot {
                                 device_status: previous.device_status,
                                 active_environment: previous.active_environment,
+                                config_revision: revision,
+                                current_dpi: previous.current_dpi,
+                                desired_dpi,
+                                dpi_capability: previous.dpi_capability,
+                            };
+                            *command_snapshot
+                                .write()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner()) = current.clone();
+                            serde_json::to_value(current).expect("AgentSnapshot 必须可序列化")
+                        });
+                        let _ = reply.send(result);
+                    }
+                    DeviceCommand::SetSelectionMode { mode, reply } => {
+                        let mut draft = repository.borrow().document().clone();
+                        draft.selection.mode = match mode {
+                            pulsehub_ipc::SelectionMode::Auto => SelectionMode::Auto,
+                            pulsehub_ipc::SelectionMode::Office => SelectionMode::Office,
+                            pulsehub_ipc::SelectionMode::Cs2 => SelectionMode::Cs2,
+                        };
+                        let revision = repository.borrow().revision();
+                        let draft = serde_json::to_value(draft)
+                            .map_err(|error| CommandFailure {
+                                code: ErrorCode::Internal,
+                                message: error.to_string(),
+                                retryable: false,
+                            })
+                            .and_then(|draft| {
+                                repository
+                                    .borrow_mut()
+                                    .commit(revision, draft)
+                                    .map_err(config_command_failure)
+                            });
+                        let result = draft.map(|revision| {
+                            let config = repository.borrow().document().clone();
+                            let previous = command_snapshot
+                                .read()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .clone();
+                            let environment = resolve_target(&config)
+                                .map(|target| target.environment)
+                                .unwrap_or_else(|_| selected_environment(&config, None));
+                            let desired_dpi = match environment {
+                                Environment::Office => config.profiles.office.dpi,
+                                Environment::Cs2 => config.profiles.cs2.dpi,
+                            };
+                            let current = AgentSnapshot {
+                                device_status: previous.device_status,
+                                active_environment: match environment {
+                                    Environment::Office => IpcEnvironment::Office,
+                                    Environment::Cs2 => IpcEnvironment::Cs2,
+                                },
                                 config_revision: revision,
                                 current_dpi: previous.current_dpi,
                                 desired_dpi,
