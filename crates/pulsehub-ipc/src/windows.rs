@@ -170,6 +170,7 @@ mod tests {
             current_dpi: Some(100),
             desired_dpi: 100,
             dpi_capability: None,
+            integration_status: crate::IntegrationStatus::Unknown,
         };
         let server_thread = thread::spawn({
             let snapshot = snapshot.clone();
@@ -242,6 +243,7 @@ mod tests {
             current_dpi: Some(3200),
             desired_dpi: 3200,
             dpi_capability: None,
+            integration_status: crate::IntegrationStatus::Unknown,
         };
         let server_thread = thread::spawn(move || {
             let mut stream = server.accept().unwrap();

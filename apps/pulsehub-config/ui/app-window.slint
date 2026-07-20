@@ -20,7 +20,8 @@ export component AppWindow inherits Window {
     in property <[MappingItem]> office-mappings;
     in property <[MappingItem]> cs2-mappings;
     in-out property <string> selection-mode: "自动";
-    in property <bool> start-with-windows: true;
+    in-out property <bool> start-with-windows: true;
+    in property <string> integration-status: "未知";
     in property <string> connection-text: "正在连接代理";
     in property <string> device-status: "正在连接设备";
     in property <string> environment-name: "—";
@@ -31,7 +32,7 @@ export component AppWindow inherits Window {
     in property <string> save-title: "正在读取配置";
     in property <string> save-detail: "连接代理后将显示保存和应用状态。";
     callback refresh-requested();
-    callback save-requested(int, int, int, string);
+    callback save-requested(int, int, int, string, bool);
     callback discard-requested();
     callback office-mapping-cycle(int);
     callback cs2-mapping-cycle(int);
@@ -66,7 +67,7 @@ export component AppWindow inherits Window {
                 if root.selected-page == 0: OverviewPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; device-status: root.device-status; environment-name: root.environment-name; current-dpi: root.current-dpi; desired-dpi: root.desired-dpi; apply-title: root.save-title; apply-detail: root.save-detail; }
                 if root.selected-page == 1: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "Office"; dpi: root.office-dpi; dpi-options: root.dpi-options; mappings: root.office-mappings; process-rule: ""; editing-enabled: !root.busy; dpi-changed(value) => { root.office-dpi = value; root.draft-dirty = true; } mapping-cycle-requested(index) => { root.office-mapping-cycle(index); } }
                 if root.selected-page == 2: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "CS2"; dpi: root.cs2-dpi; dpi-options: root.dpi-options; mappings: root.cs2-mappings; process-rule: "cs2.exe"; editing-enabled: !root.busy; dpi-changed(value) => { root.cs2-dpi = value; root.draft-dirty = true; } mapping-cycle-requested(index) => { root.cs2-mapping-cycle(index); } }
-                if root.selected-page == 3: SettingsPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; revision: root.revision; selection-mode: root.selection-mode; start-with-windows: root.start-with-windows; editing-enabled: !root.busy; selection-mode-cycle => { root.selection-mode = root.selection-mode == "自动" ? "固定 Office" : root.selection-mode == "固定 Office" ? "固定 CS2" : "自动"; root.draft-dirty = true; } }
+                if root.selected-page == 3: SettingsPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; revision: root.revision; selection-mode: root.selection-mode; start-with-windows: root.start-with-windows; integration-status: root.integration-status; editing-enabled: !root.busy; selection-mode-cycle => { root.selection-mode = root.selection-mode == "自动" ? "固定 Office" : root.selection-mode == "固定 Office" ? "固定 CS2" : "自动"; root.draft-dirty = true; } start-with-windows-toggle => { root.start-with-windows = !root.start-with-windows; root.draft-dirty = true; } }
             }
         }
         if root.draft-dirty: Rectangle {
@@ -75,7 +76,7 @@ export component AppWindow inherits Window {
                 VerticalLayout { Text { text: "有未保存的更改"; color: Theme.ink; font-size: 14px; font-weight: 600; } Text { text: "保存后才会发送给代理；应用状态将单独更新。"; color: Theme.muted; font-size: 12px; } }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
                 Button { text: "放弃更改"; enabled: !root.busy; clicked => { root.discard-requested(); } }
-                Button { text: root.busy ? "正在保存" : "保存配置"; primary: true; enabled: !root.busy; clicked => { root.save-requested(root.office-dpi, root.cs2-dpi, root.base-revision, root.selection-mode); } }
+                Button { text: root.busy ? "正在保存" : "保存配置"; primary: true; enabled: !root.busy; clicked => { root.save-requested(root.office-dpi, root.cs2-dpi, root.base-revision, root.selection-mode, root.start-with-windows); } }
             }
         }
     }
@@ -93,7 +94,7 @@ export component AppWindow inherits Window {
                     Button { text: "取消"; clicked => { root.close-dialog-visible = false; } }
                     Rectangle { horizontal-stretch: 1; background: transparent; }
                     Button { text: "放弃更改"; clicked => { root.close-dialog-visible = false; root.discard-and-close-requested(); } }
-                    Button { text: "保存并关闭"; primary: true; enabled: !root.busy; clicked => { root.close-dialog-visible = false; root.close-after-save = true; root.save-requested(root.office-dpi, root.cs2-dpi, root.base-revision, root.selection-mode); } }
+                    Button { text: "保存并关闭"; primary: true; enabled: !root.busy; clicked => { root.close-dialog-visible = false; root.close-after-save = true; root.save-requested(root.office-dpi, root.cs2-dpi, root.base-revision, root.selection-mode, root.start-with-windows); } }
                 }
             }
         }

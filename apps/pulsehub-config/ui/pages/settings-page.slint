@@ -4,7 +4,9 @@ export component SettingsPage inherits Rectangle {
     in property <string> selection-mode;
     in property <bool> start-with-windows;
     in property <bool> editing-enabled: true;
+    in property <string> integration-status;
     callback selection-mode-cycle();
+    callback start-with-windows-toggle();
     background: transparent;
     VerticalLayout {
         spacing: 20px;
@@ -12,8 +14,16 @@ export component SettingsPage inherits Rectangle {
         Text { text: "代理行为、环境选择与诊断信息。"; color: Theme.muted; font-size: 14px; }
         Rectangle { background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: 180px;
             VerticalLayout { padding: 20px; spacing: 14px;
-                Text { text: "登录 Windows 时启动代理：" + (root.start-with-windows ? "已启用" : "未启用"); color: Theme.ink; font-size: 14px; font-weight: 600; }
-                Text { text: "登录启动同步将在 Windows 集成阶段开放编辑"; color: Theme.muted; font-size: 12px; }
+                Rectangle { height: 44px; border-color: Theme.hairline; border-width: 1px; border-radius: 8px; background: Theme.surface;
+                    HorizontalLayout { padding-left: 12px; padding-right: 12px;
+                        Text { text: "登录 Windows 时启动代理"; color: Theme.ink; font-size: 14px; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                        Text { text: root.start-with-windows ? "已启用" : "未启用"; color: Theme.primary; font-size: 14px; vertical-alignment: center; }
+                        Text { text: "点击切换"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                    }
+                    TouchArea { enabled: root.editing-enabled; clicked => { root.start-with-windows-toggle(); } }
+                }
+                Text { text: "系统集成：" + root.integration-status; color: Theme.muted; font-size: 12px; }
                 Rectangle { height: 44px; border-color: Theme.hairline; border-width: 1px; border-radius: 8px; background: Theme.surface;
                     HorizontalLayout { padding-left: 12px; padding-right: 12px;
                         Text { text: "环境选择"; color: Theme.ink; font-size: 14px; vertical-alignment: center; }

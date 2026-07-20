@@ -144,6 +144,14 @@ pub enum DeviceStatus {
     Degraded,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationStatus {
+    Unknown,
+    Synced,
+    Failed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DpiCapability {
@@ -163,6 +171,12 @@ pub struct AgentSnapshot {
     pub desired_dpi: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dpi_capability: Option<DpiCapability>,
+    #[serde(default = "default_integration_status")]
+    pub integration_status: IntegrationStatus,
+}
+
+fn default_integration_status() -> IntegrationStatus {
+    IntegrationStatus::Unknown
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -599,6 +613,7 @@ mod tests {
                 step: Some(50),
                 selectable_values: vec![100, 400, 800, 1600, 3200, 6400],
             }),
+            integration_status: IntegrationStatus::Synced,
         };
         let mut session = Session::default();
         let hello_response = dispatch_request(&mut session, &hello(), &snapshot);
@@ -620,6 +635,7 @@ mod tests {
             current_dpi: None,
             desired_dpi: 3200,
             dpi_capability: None,
+            integration_status: IntegrationStatus::Unknown,
         };
         let request = Request::GetSnapshot {
             version: 1,

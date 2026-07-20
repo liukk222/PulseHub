@@ -17,7 +17,8 @@ use pulsehub_config_store::{
 use pulsehub_core::Environment;
 use pulsehub_device::hidpp::{DpiWriteResult, HidppError, probe_first_g102, set_first_g102_dpi};
 use pulsehub_ipc::{
-    AgentSnapshot, DeviceStatus, DpiCapability, Environment as IpcEnvironment, PROTOCOL_VERSION,
+    AgentSnapshot, DeviceStatus, DpiCapability, Environment as IpcEnvironment, IntegrationStatus,
+    PROTOCOL_VERSION,
 };
 use pulsehub_profile::{
     EnvironmentTracker, ProcessRule, RetryBackoff, SelectionPolicy, select_environment_with_rules,
@@ -458,6 +459,10 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                                 current_dpi: previous.current_dpi,
                                 desired_dpi,
                                 dpi_capability: previous.dpi_capability,
+                                integration_status: sync_start_with_windows(
+                                    current_config.agent.start_with_windows,
+                                )
+                                .map_or(IntegrationStatus::Failed, |()| IntegrationStatus::Synced),
                             };
                             *command_snapshot
                                 .write()
@@ -509,6 +514,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                                 current_dpi: previous.current_dpi,
                                 desired_dpi,
                                 dpi_capability: previous.dpi_capability,
+                                integration_status: previous.integration_status,
                             };
                             *command_snapshot
                                 .write()
@@ -831,6 +837,7 @@ fn live_snapshot(config: &ConfigDocument) -> Result<AgentSnapshot, String> {
             ),
         })
     });
+    snapshot.integration_status = startup_integration_status(config.agent.start_with_windows);
     Ok(snapshot)
 }
 
@@ -879,6 +886,7 @@ fn snapshot_for_target(
         current_dpi,
         desired_dpi: target.dpi,
         dpi_capability: None,
+        integration_status: IntegrationStatus::Unknown,
     }
 }
 
@@ -898,6 +906,61 @@ fn suggested_dpi_values(
                 && step.is_none_or(|step| (*value - minimum).is_multiple_of(step))
         })
         .collect()
+}
+
+#[cfg(windows)]
+fn startup_integration_status(enabled: bool) -> IntegrationStatus {
+    let exists = std::process::Command::new("reg.exe")
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+            "/v",
+            "PulseHub",
+        ])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if exists == enabled {
+        IntegrationStatus::Synced
+    } else {
+        IntegrationStatus::Failed
+    }
+}
+
+#[cfg(not(windows))]
+fn startup_integration_status(_: bool) -> IntegrationStatus {
+    IntegrationStatus::Unknown
+}
+
+#[cfg(windows)]
+fn sync_start_with_windows(enabled: bool) -> Result<(), String> {
+    let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+    if !enabled {
+        let status = std::process::Command::new("reg.exe")
+            .args(["delete", key, "/v", "PulseHub", "/f"])
+            .status()
+            .map_err(|error| format!("无法启动 reg.exe：{error}"))?;
+        if status.success() || startup_integration_status(false) == IntegrationStatus::Synced {
+            return Ok(());
+        }
+        return Err(format!("删除登录启动项失败：{status}"));
+    }
+    let executable =
+        std::env::current_exe().map_err(|error| format!("无法解析代理路径：{error}"))?;
+    let command = format!(
+        "\"{}\" --run-agent --confirm-device-write",
+        executable.display()
+    );
+    let status = std::process::Command::new("reg.exe")
+        .args([
+            "add", key, "/v", "PulseHub", "/t", "REG_SZ", "/d", &command, "/f",
+        ])
+        .status()
+        .map_err(|error| format!("无法启动 reg.exe：{error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("写入登录启动项失败：{status}"))
+    }
 }
 
 fn run_watcher(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCode {

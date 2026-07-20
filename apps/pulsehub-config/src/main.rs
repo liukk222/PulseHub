@@ -18,6 +18,7 @@ enum AgentAction {
     ValidateCurrentConfig,
     CommitCurrentConfig,
     SetSelectionMode(pulsehub_ipc::SelectionMode),
+    SetStartup(bool),
 }
 
 fn main() -> ExitCode {
@@ -35,6 +36,8 @@ fn main() -> ExitCode {
         Some("--set-selection-cs2") => run_agent_action(AgentAction::SetSelectionMode(
             pulsehub_ipc::SelectionMode::Cs2,
         )),
+        Some("--enable-startup") => run_agent_action(AgentAction::SetStartup(true)),
+        Some("--disable-startup") => run_agent_action(AgentAction::SetStartup(false)),
         Some("-h" | "--help") => {
             print_help();
             ExitCode::SUCCESS
@@ -84,49 +87,54 @@ fn run_gui() -> ExitCode {
     });
 
     let save_ui = ui.as_weak();
-    ui.on_save_requested(move |office_dpi, cs2_dpi, base_revision, selection_mode| {
-        if let Some(ui) = save_ui.upgrade() {
-            ui.set_busy(true);
-            ui.set_save_title("正在检查配置".into());
-            ui.set_save_detail("代理正在校验草稿，保存按钮暂时不可用。".into());
-        }
-        let office_mappings = save_ui
-            .upgrade()
-            .map(|ui| mapping_selections(&ui.get_office_mappings()))
-            .unwrap_or_default();
-        let cs2_mappings = save_ui
-            .upgrade()
-            .map(|ui| mapping_selections(&ui.get_cs2_mappings()))
-            .unwrap_or_default();
-        let worker_ui = save_ui.clone();
-        std::thread::spawn(move || {
-            let result = save_gui_config(
-                office_dpi as u16,
-                cs2_dpi as u16,
-                base_revision as u64,
-                &office_mappings,
-                &cs2_mappings,
-                selection_mode.as_str(),
-            );
-            let _ = slint::invoke_from_event_loop(move || match result {
-                Ok((snapshot, config)) => {
-                    if let Some(ui) = worker_ui.upgrade() {
-                        apply_gui_state(&ui, &snapshot, &config);
-                        ui.set_draft_dirty(false);
-                        ui.set_busy(false);
-                        ui.set_save_title("配置已保存".into());
-                        ui.set_save_detail("配置文件已经更新；设备应用状态由代理独立管理。".into());
-                        if ui.get_close_after_save() {
-                            ui.set_close_after_save(false);
-                            let _ = ui.hide();
+    ui.on_save_requested(
+        move |office_dpi, cs2_dpi, base_revision, selection_mode, start_with_windows| {
+            if let Some(ui) = save_ui.upgrade() {
+                ui.set_busy(true);
+                ui.set_save_title("正在检查配置".into());
+                ui.set_save_detail("代理正在校验草稿，保存按钮暂时不可用。".into());
+            }
+            let office_mappings = save_ui
+                .upgrade()
+                .map(|ui| mapping_selections(&ui.get_office_mappings()))
+                .unwrap_or_default();
+            let cs2_mappings = save_ui
+                .upgrade()
+                .map(|ui| mapping_selections(&ui.get_cs2_mappings()))
+                .unwrap_or_default();
+            let worker_ui = save_ui.clone();
+            std::thread::spawn(move || {
+                let result = save_gui_config(
+                    office_dpi as u16,
+                    cs2_dpi as u16,
+                    base_revision as u64,
+                    &office_mappings,
+                    &cs2_mappings,
+                    selection_mode.as_str(),
+                    start_with_windows,
+                );
+                let _ = slint::invoke_from_event_loop(move || match result {
+                    Ok((snapshot, config)) => {
+                        if let Some(ui) = worker_ui.upgrade() {
+                            apply_gui_state(&ui, &snapshot, &config);
+                            ui.set_draft_dirty(false);
+                            ui.set_busy(false);
+                            ui.set_save_title("配置已保存".into());
+                            ui.set_save_detail(
+                                "配置文件已经更新；设备应用状态由代理独立管理。".into(),
+                            );
+                            if ui.get_close_after_save() {
+                                ui.set_close_after_save(false);
+                                let _ = ui.hide();
+                            }
                         }
                     }
-                }
-                Err(error) if is_revision_conflict(&error) => show_gui_conflict(&worker_ui),
-                Err(error) => show_gui_error(&worker_ui, "未能保存配置", &error),
+                    Err(error) if is_revision_conflict(&error) => show_gui_conflict(&worker_ui),
+                    Err(error) => show_gui_error(&worker_ui, "未能保存配置", &error),
+                });
             });
-        });
-    });
+        },
+    );
 
     let office_ui = ui.as_weak();
     ui.on_office_mapping_cycle(move |index| cycle_mapping(&office_ui, true, index));
@@ -256,6 +264,14 @@ fn apply_gui_state(
     ui.set_cs2_mappings(mapping_model(&config.profiles.cs2.button_mappings));
     ui.set_selection_mode(selection_mode_label(config.selection.mode).into());
     ui.set_start_with_windows(config.agent.start_with_windows);
+    ui.set_integration_status(
+        match snapshot.integration_status {
+            pulsehub_ipc::IntegrationStatus::Unknown => "未知",
+            pulsehub_ipc::IntegrationStatus::Synced => "已同步",
+            pulsehub_ipc::IntegrationStatus::Failed => "同步失败",
+        }
+        .into(),
+    );
     ui.set_save_title(
         if snapshot.current_dpi == Some(snapshot.desired_dpi) {
             "已应用"
@@ -292,6 +308,7 @@ fn save_gui_config(
     office_mappings: &[(String, String)],
     cs2_mappings: &[(String, String)],
     selection_mode: &str,
+    start_with_windows: bool,
 ) -> Result<(AgentSnapshot, pulsehub_config_store::ConfigDocument), String> {
     use pulsehub_ipc::windows::{connect_with_retry, default_pipe_path};
 
@@ -303,6 +320,7 @@ fn save_gui_config(
     apply_mapping_selections(&mut config.profiles.office.button_mappings, office_mappings)?;
     apply_mapping_selections(&mut config.profiles.cs2.button_mappings, cs2_mappings)?;
     config.selection.mode = selection_mode_from_label(selection_mode)?;
+    config.agent.start_with_windows = start_with_windows;
     let draft = serde_json::to_value(&config).map_err(|error| error.to_string())?;
     let mut stream = connect_with_retry(
         default_pipe_path().map_err(|error| error.to_string())?,
@@ -563,7 +581,9 @@ fn run_agent_action(action: AgentAction) -> ExitCode {
 
     let draft = if matches!(
         action,
-        AgentAction::ValidateCurrentConfig | AgentAction::CommitCurrentConfig
+        AgentAction::ValidateCurrentConfig
+            | AgentAction::CommitCurrentConfig
+            | AgentAction::SetStartup(_)
     ) {
         let path = match pulsehub_config_store::default_config_path() {
             Ok(path) => path,
@@ -572,13 +592,16 @@ fn run_agent_action(action: AgentAction) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        let config = match pulsehub_config_store::load_or_create_default(&path) {
+        let mut config = match pulsehub_config_store::load_or_create_default(&path) {
             Ok(config) => config,
             Err(error) => {
                 eprintln!("配置读取失败：{error}");
                 return ExitCode::FAILURE;
             }
         };
+        if let AgentAction::SetStartup(enabled) = action {
+            config.agent.start_with_windows = enabled;
+        }
         match serde_json::to_value(config) {
             Ok(value) => Some(value),
             Err(error) => {
@@ -619,7 +642,10 @@ fn run_agent_action(action: AgentAction) -> ExitCode {
         eprintln!("IPC 版本协商失败：{error}");
         return ExitCode::FAILURE;
     }
-    let base_revision = if matches!(action, AgentAction::CommitCurrentConfig) {
+    let base_revision = if matches!(
+        action,
+        AgentAction::CommitCurrentConfig | AgentAction::SetStartup(_)
+    ) {
         let snapshot_request = Request::GetSnapshot {
             version: PROTOCOL_VERSION,
             request_id: "config-before-commit-1".to_owned(),
@@ -670,6 +696,12 @@ fn run_agent_action(action: AgentAction) -> ExitCode {
             request_id: "config-set-selection-1".to_owned(),
             mode,
         },
+        AgentAction::SetStartup(_) => Request::CommitConfig {
+            version: PROTOCOL_VERSION,
+            request_id: "config-set-startup-1".to_owned(),
+            base_revision,
+            draft: draft.expect("登录启动操作必须加载草稿"),
+        },
     };
     let response = match exchange(&mut stream, &request) {
         Ok(response) => response,
@@ -699,6 +731,7 @@ fn run_agent_action(action: AgentAction) -> ExitCode {
             AgentAction::Apply => "应用完成",
             AgentAction::CommitCurrentConfig => "配置提交完成",
             AgentAction::SetSelectionMode(_) => "环境模式更新完成",
+            AgentAction::SetStartup(_) => "登录启动更新完成",
             _ => "代理快照",
         },
         snapshot.device_status,
@@ -720,6 +753,7 @@ fn run_agent_action(action: AgentAction) -> ExitCode {
             capability.selectable_values
         );
     }
+    println!("Windows 登录启动：{:?}", snapshot.integration_status);
     ExitCode::SUCCESS
 }
 
@@ -758,6 +792,8 @@ fn print_help() {
     println!("  --set-selection-auto  将环境选择保存为自动");
     println!("  --set-selection-office  将环境选择保存为固定 Office");
     println!("  --set-selection-cs2  将环境选择保存为固定 CS2");
+    println!("  --enable-startup  保存并创建当前用户登录启动项");
+    println!("  --disable-startup  保存并删除当前用户登录启动项");
 }
 
 #[cfg(test)]
