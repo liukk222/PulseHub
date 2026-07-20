@@ -23,6 +23,7 @@ struct Arguments {
     apply_current_environment: bool,
     watch_foreground: bool,
     serve_ipc_once: bool,
+    serve_ipc: bool,
     confirm_device_write: bool,
     exit_after_seconds: Option<u64>,
 }
@@ -89,6 +90,8 @@ fn main() -> ExitCode {
 
     if arguments.watch_foreground {
         run_watcher(&config, arguments.exit_after_seconds)
+    } else if arguments.serve_ipc {
+        serve_ipc(&config, arguments.exit_after_seconds)
     } else if arguments.serve_ipc_once {
         serve_ipc_once(&config)
     } else if arguments.inspect_foreground || arguments.apply_current_environment {
@@ -103,28 +106,13 @@ fn main() -> ExitCode {
 fn serve_ipc_once(config: &ConfigDocument) -> ExitCode {
     use pulsehub_ipc::windows::{DEFAULT_PIPE_PATH, Server};
 
-    let target = match resolve_target(config) {
-        Ok(target) => target,
+    let snapshot = match live_snapshot(config) {
+        Ok(snapshot) => snapshot,
         Err(error) => {
             eprintln!("IPC 快照构造失败：{error}");
             return ExitCode::FAILURE;
         }
     };
-    println!("正在执行 HID++ 只读状态查询……");
-    let probe = probe_first_g102(false);
-    let (device_status, current_dpi) = match &probe {
-        Ok(result) => match result.dpi_sensors.first() {
-            Some(sensor) => (DeviceStatus::Ready, Some(sensor.current)),
-            None => (DeviceStatus::Degraded, None),
-        },
-        Err(HidppError::InterfaceNotFound) => (DeviceStatus::Disconnected, None),
-        Err(HidppError::Timeout) => (DeviceStatus::Busy, None),
-        Err(_) => (DeviceStatus::Degraded, None),
-    };
-    if let Err(error) = &probe {
-        eprintln!("HID++ 状态查询未完成：{error}；仍提供降级快照。");
-    }
-    let snapshot = snapshot_for_target(&target, 0, device_status, current_dpi);
     let server = match Server::bind(DEFAULT_PIPE_PATH) {
         Ok(server) => server,
         Err(error) => {
@@ -151,6 +139,122 @@ fn serve_ipc_once(config: &ConfigDocument) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+#[cfg(windows)]
+fn serve_ipc(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCode {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, RwLock};
+    use std::thread;
+    use std::time::Instant;
+
+    use pulsehub_ipc::windows::{DEFAULT_PIPE_PATH, Server, connect, serve_connection_with};
+
+    const MAX_CLIENTS: usize = 4;
+    let snapshot = match live_snapshot(config) {
+        Ok(snapshot) => Arc::new(RwLock::new(snapshot)),
+        Err(error) => {
+            eprintln!("IPC 快照构造失败：{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let server = match Server::bind(DEFAULT_PIPE_PATH) {
+        Ok(server) => server,
+        Err(error) => {
+            eprintln!("IPC 管道创建失败：{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let stopping = Arc::new(AtomicBool::new(false));
+    let install_stop_handler = |stopping: Arc<AtomicBool>| {
+        ctrlc::set_handler(move || {
+            stopping.store(true, Ordering::Release);
+            let _ = connect(DEFAULT_PIPE_PATH);
+        })
+    };
+    if let Err(error) = install_stop_handler(Arc::clone(&stopping)) {
+        eprintln!("IPC Ctrl+C 处理器安装失败：{error}");
+        return ExitCode::FAILURE;
+    }
+    if let Some(seconds) = exit_after_seconds {
+        let stopping = Arc::clone(&stopping);
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(seconds));
+            stopping.store(true, Ordering::Release);
+            let _ = connect(DEFAULT_PIPE_PATH);
+        });
+    }
+
+    let active_clients = Arc::new(AtomicUsize::new(0));
+    println!("IPC 常驻服务已启动：{DEFAULT_PIPE_PATH}；最多 {MAX_CLIENTS} 个并发客户端。");
+    println!("按 Ctrl+C 退出。服务只读取 HID 状态，不写入设备。");
+    while !stopping.load(Ordering::Acquire) {
+        let mut stream = match server.accept() {
+            Ok(stream) => stream,
+            Err(error) => {
+                eprintln!("IPC accept 失败：{error}");
+                continue;
+            }
+        };
+        if stopping.load(Ordering::Acquire) {
+            break;
+        }
+        if active_clients.load(Ordering::Acquire) >= MAX_CLIENTS {
+            eprintln!("IPC 客户端已达上限，拒绝新连接。");
+            continue;
+        }
+        active_clients.fetch_add(1, Ordering::AcqRel);
+        let active_clients_for_thread = Arc::clone(&active_clients);
+        let snapshot_for_thread = Arc::clone(&snapshot);
+        thread::spawn(move || {
+            let result = serve_connection_with(&mut stream, || {
+                snapshot_for_thread
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone()
+            });
+            if let Err(error) = result {
+                eprintln!("IPC 客户端会话失败：{error}");
+            }
+            active_clients_for_thread.fetch_sub(1, Ordering::AcqRel);
+        });
+    }
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while active_clients.load(Ordering::Acquire) != 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    let remaining = active_clients.load(Ordering::Acquire);
+    if remaining == 0 {
+        println!("IPC 常驻服务已停止，所有客户端会话均已释放。");
+    } else {
+        eprintln!("IPC 常驻服务停止时仍有 {remaining} 个客户端会话，由进程退出统一回收。");
+    }
+    ExitCode::SUCCESS
+}
+
+#[cfg(not(windows))]
+fn serve_ipc(_: &ConfigDocument, _: Option<u64>) -> ExitCode {
+    eprintln!("IPC Named Pipe 常驻模式仅支持 Windows。");
+    ExitCode::FAILURE
+}
+
+fn live_snapshot(config: &ConfigDocument) -> Result<AgentSnapshot, String> {
+    let target = resolve_target(config)?;
+    println!("正在执行 HID++ 只读状态查询……");
+    let probe = probe_first_g102(false);
+    let (device_status, current_dpi) = match &probe {
+        Ok(result) => match result.dpi_sensors.first() {
+            Some(sensor) => (DeviceStatus::Ready, Some(sensor.current)),
+            None => (DeviceStatus::Degraded, None),
+        },
+        Err(HidppError::InterfaceNotFound) => (DeviceStatus::Disconnected, None),
+        Err(HidppError::Timeout) => (DeviceStatus::Busy, None),
+        Err(_) => (DeviceStatus::Degraded, None),
+    };
+    if let Err(error) = &probe {
+        eprintln!("HID++ 状态查询未完成：{error}；仍提供降级快照。");
+    }
+    Ok(snapshot_for_target(&target, 0, device_status, current_dpi))
 }
 
 #[cfg(not(windows))]
@@ -335,6 +439,7 @@ fn parse_arguments() -> Result<Arguments, String> {
             "--apply-current-environment" => parsed.apply_current_environment = true,
             "--watch-foreground" => parsed.watch_foreground = true,
             "--serve-ipc-once" => parsed.serve_ipc_once = true,
+            "--serve-ipc" => parsed.serve_ipc = true,
             "--confirm-device-write" => parsed.confirm_device_write = true,
             "--exit-after-seconds" => {
                 let value = arguments
@@ -358,7 +463,8 @@ fn parse_arguments() -> Result<Arguments, String> {
     let modes = u8::from(parsed.inspect_foreground)
         + u8::from(parsed.apply_current_environment)
         + u8::from(parsed.watch_foreground)
-        + u8::from(parsed.serve_ipc_once);
+        + u8::from(parsed.serve_ipc_once)
+        + u8::from(parsed.serve_ipc);
     if modes > 1 {
         return Err("前台检查、单次应用和自动监听模式不能同时使用".to_owned());
     }
@@ -366,8 +472,10 @@ fn parse_arguments() -> Result<Arguments, String> {
     if writing != parsed.confirm_device_write {
         return Err("设备应用或自动监听必须与 --confirm-device-write 同时提供".to_owned());
     }
-    if parsed.exit_after_seconds.is_some() && !parsed.watch_foreground {
-        return Err("--exit-after-seconds 只能与 --watch-foreground 一起使用".to_owned());
+    if parsed.exit_after_seconds.is_some() && !(parsed.watch_foreground || parsed.serve_ipc) {
+        return Err(
+            "--exit-after-seconds 只能与 --watch-foreground 或 --serve-ipc 一起使用".to_owned(),
+        );
     }
     Ok(parsed)
 }
@@ -379,10 +487,12 @@ fn print_help() {
         "      pulsehub-agent --watch-foreground --confirm-device-write [--exit-after-seconds <1-3600>]"
     );
     println!("      pulsehub-agent --serve-ipc-once");
+    println!("      pulsehub-agent --serve-ipc [--exit-after-seconds <1-3600>]");
     println!("  --inspect-foreground  只读显示前台进程、目标环境和 DPI");
     println!("  --apply-current-environment  按当前前台进程应用一次运行态 DPI");
     println!("  --watch-foreground  监听 Windows 前台事件并自动切换运行态 DPI");
     println!("  --serve-ipc-once  只读服务一个 IPC 客户端，断开后退出");
+    println!("  --serve-ipc  启动最多 4 个并发客户端的只读 IPC 常驻服务");
     println!("  --confirm-device-write  显式确认本次进程中的 DPI 设备写入");
     println!("  --exit-after-seconds  验证用的自动退出时间；省略时按 Ctrl+C 退出");
 }

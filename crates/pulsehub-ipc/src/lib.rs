@@ -378,6 +378,18 @@ pub fn serve_next<T: Read + Write>(
     write_frame(stream, &response)
 }
 
+pub fn serve_next_with<T: Read + Write>(
+    stream: &mut T,
+    session: &mut Session,
+    snapshot: impl FnOnce() -> AgentSnapshot,
+) -> Result<(), FrameError> {
+    let request = read_request(stream)?;
+    let snapshot = snapshot();
+    let response = dispatch_request(session, &request, &snapshot);
+    response.validate().map_err(FrameError::Protocol)?;
+    write_frame(stream, &response)
+}
+
 pub fn write_frame(writer: &mut impl Write, message: &impl Serialize) -> Result<(), FrameError> {
     let payload =
         serde_json::to_vec(message).map_err(|error| FrameError::Json(error.to_string()))?;

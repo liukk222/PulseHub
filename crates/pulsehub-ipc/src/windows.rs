@@ -9,7 +9,7 @@ use interprocess::os::windows::named_pipe::{
 use interprocess::os::windows::security_descriptor::SecurityDescriptor;
 use widestring::U16CString;
 
-use crate::{AgentSnapshot, FrameError, Session, serve_next};
+use crate::{AgentSnapshot, FrameError, Session, serve_next, serve_next_with};
 
 pub const DEFAULT_PIPE_PATH: &str = r"\\.\pipe\PulseHub.Agent.v1";
 const OWNER_ONLY_DACL: &str = "D:P(A;;GA;;;OW)";
@@ -52,6 +52,20 @@ impl Server {
                 Err(FrameError::Io(io::ErrorKind::UnexpectedEof)) => return Ok(()),
                 Err(error) => return Err(error),
             }
+        }
+    }
+}
+
+pub fn serve_connection_with(
+    stream: &mut ByteStream,
+    snapshot: impl Fn() -> AgentSnapshot,
+) -> Result<(), FrameError> {
+    let mut session = Session::default();
+    loop {
+        match serve_next_with(stream, &mut session, &snapshot) {
+            Ok(()) => {}
+            Err(FrameError::Io(io::ErrorKind::UnexpectedEof)) => return Ok(()),
+            Err(error) => return Err(error),
         }
     }
 }

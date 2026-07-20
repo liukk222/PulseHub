@@ -816,13 +816,27 @@ payload_length bytes UTF-8 JSON
 当前 `pulsehub-ipc` 已实现上述纯协议层：所有 DTO 使用严格未知字段拒绝，读取端在分配 payload
 前检查长度上限，`Session` 在成功处理 `hello` 前拒绝其他请求。单元测试覆盖正常往返、截断帧、
 超长帧、非法 UTF-8/JSON、未知字段/消息类型、版本不匹配以及响应信封不变量。Windows Named
-Pipe 帧传输和单连接会话已实现；代理常驻 accept 循环、并发客户端上限、当前 logon SID
-命名和关机协调是下一实现单元。
+Pipe 帧传输、单连接会话、代理常驻 accept 循环、并发客户端上限和关机协调已实现；当前 logon
+SID 命名以及与前台环境监听共享同一实时状态所有者是下一实现单元。
+
+阶段 3 当前已增加开发期常驻模式 `--serve-ipc`：主线程阻塞在 `accept`，每个连接使用独立会话
+线程，最多允许 4 个活动客户端；每次请求从共享 `RwLock<AgentSnapshot>` 克隆最新快照，而不是
+在连接建立时永久缓存。达到上限时立即关闭新连接。Ctrl+C 或验证超时通过本地自连接唤醒阻塞
+的 `accept`，停止接收后为现有连接提供 1 秒退出窗口，剩余句柄最终由进程退出回收。该模式已经
+用 3 个连续真实客户端验证快照一致性和无遗留会话退出。当前 logon SID 命名仍是生产接入前的
+剩余安全项。
 
 开发期可在两个 PowerShell 终端执行以下端到端验证；代理先执行 HID++ 只读查询，服务一个客户端后退出，不写入设备：
 
 ~~~powershell
 cargo run -p pulsehub-agent -- --serve-ipc-once
+cargo run -p pulsehub-config -- --inspect-agent
+~~~
+
+常驻服务验证：
+
+~~~powershell
+cargo run -p pulsehub-agent -- --serve-ipc --exit-after-seconds 30
 cargo run -p pulsehub-config -- --inspect-agent
 ~~~
 
