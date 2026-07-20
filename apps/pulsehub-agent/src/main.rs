@@ -352,7 +352,9 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                     None,
                 ),
             );
-            match apply_target_dpi(&target) {
+            // G102 只公开一个板载配置。环境变化时必须同时同步按键映射与
+            // DPI 模式；apply_target_full 会先比较回读内容，完全一致时不写闪存。
+            match apply_target_full(&target) {
                 Ok(applied) => {
                     tracker.observe(target.environment);
                     backoff.record_success();
