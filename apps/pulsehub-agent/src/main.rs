@@ -345,10 +345,9 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                 Ok(applied) => {
                     tracker.observe(target.environment);
                     backoff.record_success();
-                    let capability = foreground_snapshot
+                    let previous = foreground_snapshot
                         .read()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .dpi_capability
                         .clone();
                     let mut current = snapshot_for_target(
                         &target,
@@ -356,7 +355,8 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                         DeviceStatus::Ready,
                         Some(applied.after),
                     );
-                    current.dpi_capability = capability;
+                    current.dpi_capability = previous.dpi_capability;
+                    current.integration_status = previous.integration_status;
                     *foreground_snapshot
                         .write()
                         .unwrap_or_else(|poisoned| poisoned.into_inner()) = current;
@@ -396,10 +396,9 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                                         retryable: error.retryable,
                                     })
                                     .map(|applied| {
-                                        let capability = command_snapshot
+                                        let previous = command_snapshot
                                             .read()
                                             .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                            .dpi_capability
                                             .clone();
                                         let mut current = snapshot_for_target(
                                             &target,
@@ -407,7 +406,8 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                                             DeviceStatus::Ready,
                                             Some(applied.after),
                                         );
-                                        current.dpi_capability = capability;
+                                        current.dpi_capability = previous.dpi_capability;
+                                        current.integration_status = previous.integration_status;
                                         *command_snapshot
                                             .write()
                                             .unwrap_or_else(|poisoned| poisoned.into_inner()) =
@@ -667,6 +667,7 @@ fn serve_ipc_apply_session(
             match apply_target(&target) {
                 Ok(applied) => {
                     let capability = snapshot.dpi_capability.clone();
+                    let integration_status = snapshot.integration_status;
                     snapshot = snapshot_for_target(
                         &target,
                         snapshot.config_revision,
@@ -674,6 +675,7 @@ fn serve_ipc_apply_session(
                         Some(applied.after),
                     );
                     snapshot.dpi_capability = capability;
+                    snapshot.integration_status = integration_status;
                     Response::success(
                         request.request_id(),
                         serde_json::to_value(&snapshot).expect("AgentSnapshot 必须可序列化"),

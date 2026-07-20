@@ -37,6 +37,7 @@ export component AppWindow inherits Window {
     callback office-mapping-cycle(int);
     callback cs2-mapping-cycle(int);
     callback discard-and-close-requested();
+    callback retry-apply-requested();
 
     VerticalLayout {
         spacing: 0px;
@@ -64,7 +65,7 @@ export component AppWindow inherits Window {
             }
             Rectangle {
                 horizontal-stretch: 1; background: Theme.canvas;
-                if root.selected-page == 0: OverviewPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; device-status: root.device-status; environment-name: root.environment-name; current-dpi: root.current-dpi; desired-dpi: root.desired-dpi; apply-title: root.save-title; apply-detail: root.save-detail; }
+                if root.selected-page == 0: OverviewPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; device-status: root.device-status; environment-name: root.environment-name; current-dpi: root.current-dpi; desired-dpi: root.desired-dpi; apply-title: root.save-title; apply-detail: root.save-detail; apply-enabled: !root.busy && !root.draft-dirty; retry-apply-requested => { root.retry-apply-requested(); } }
                 if root.selected-page == 1: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "Office"; dpi: root.office-dpi; dpi-options: root.dpi-options; mappings: root.office-mappings; process-rule: ""; editing-enabled: !root.busy; dpi-changed(value) => { root.office-dpi = value; root.draft-dirty = true; } mapping-cycle-requested(index) => { root.office-mapping-cycle(index); } }
                 if root.selected-page == 2: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "CS2"; dpi: root.cs2-dpi; dpi-options: root.dpi-options; mappings: root.cs2-mappings; process-rule: "cs2.exe"; editing-enabled: !root.busy; dpi-changed(value) => { root.cs2-dpi = value; root.draft-dirty = true; } mapping-cycle-requested(index) => { root.cs2-mapping-cycle(index); } }
                 if root.selected-page == 3: SettingsPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; revision: root.revision; selection-mode: root.selection-mode; start-with-windows: root.start-with-windows; integration-status: root.integration-status; editing-enabled: !root.busy; selection-mode-cycle => { root.selection-mode = root.selection-mode == "自动" ? "固定 Office" : root.selection-mode == "固定 Office" ? "固定 CS2" : "自动"; root.draft-dirty = true; } start-with-windows-toggle => { root.start-with-windows = !root.start-with-windows; root.draft-dirty = true; } }

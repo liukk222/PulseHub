@@ -151,6 +151,27 @@ fn run_gui() -> ExitCode {
             let _ = ui.hide();
         }
     });
+    let apply_ui = ui.as_weak();
+    ui.on_retry_apply_requested(move || {
+        if let Some(ui) = apply_ui.upgrade() {
+            ui.set_busy(true);
+            ui.set_save_title("正在应用配置".into());
+            ui.set_save_detail("代理正在写入运行态 DPI 并执行回读校验。".into());
+        }
+        let worker_ui = apply_ui.clone();
+        std::thread::spawn(move || {
+            let result = apply_agent_now();
+            let _ = slint::invoke_from_event_loop(move || match result {
+                Ok((snapshot, config)) => {
+                    if let Some(ui) = worker_ui.upgrade() {
+                        apply_gui_state(&ui, &snapshot, &config);
+                        ui.set_busy(false);
+                    }
+                }
+                Err(error) => show_apply_error(&worker_ui, &error),
+            });
+        });
+    });
     refresh_gui(ui.as_weak());
 
     match ui.run() {
@@ -209,6 +230,17 @@ fn show_gui_error(ui: &slint::Weak<AppWindow>, title: &str, error: &str) {
         window.set_device_status("无法读取设备状态".into());
         window.set_save_title(title.into());
         window.set_save_detail(format!("{error} 配置草稿仍保留在窗口中。").into());
+    }
+}
+
+#[cfg(windows)]
+fn show_apply_error(ui: &slint::Weak<AppWindow>, error: &str) {
+    if let Some(window) = ui.upgrade() {
+        window.set_busy(false);
+        window.set_save_title("配置未能应用".into());
+        window.set_save_detail(
+            format!("配置仍已安全保存。请检查设备连接或退出 G HUB 后重试：{error}").into(),
+        );
     }
 }
 
@@ -541,6 +573,33 @@ fn request_snapshot() -> Result<AgentSnapshot, String> {
     .map_err(|error| error.to_string())?;
     negotiate(&mut stream)?;
     request_snapshot_on(&mut stream, "gui-refresh")
+}
+
+#[cfg(windows)]
+fn apply_agent_now() -> Result<(AgentSnapshot, pulsehub_config_store::ConfigDocument), String> {
+    use pulsehub_ipc::windows::{connect_with_retry, default_pipe_path};
+    let path = pulsehub_config_store::default_config_path().map_err(|error| error.to_string())?;
+    let config =
+        pulsehub_config_store::load_or_create_default(&path).map_err(|error| error.to_string())?;
+    let mut stream = connect_with_retry(
+        default_pipe_path().map_err(|error| error.to_string())?,
+        Duration::from_secs(5),
+        Duration::from_millis(100),
+    )
+    .map_err(|error| error.to_string())?;
+    negotiate(&mut stream)?;
+    let response = exchange(
+        &mut stream,
+        &Request::ApplyNow {
+            version: PROTOCOL_VERSION,
+            request_id: "gui-apply-now".into(),
+        },
+    )?;
+    let snapshot = response
+        .data
+        .and_then(|data| serde_json::from_value(data).ok())
+        .ok_or_else(|| "代理返回的应用快照无效".to_owned())?;
+    Ok((snapshot, config))
 }
 
 #[cfg(windows)]

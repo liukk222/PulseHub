@@ -1,6 +1,7 @@
 import { Theme } from "../theme.slint";
 import { DeviceCard } from "../components/device-card.slint";
 import { StatusBanner } from "../components/status-banner.slint";
+import { Button } from "std-widgets.slint";
 
 export component OverviewPage inherits Rectangle {
     in property <string> device-status;
@@ -9,6 +10,8 @@ export component OverviewPage inherits Rectangle {
     in property <string> desired-dpi;
     in property <string> apply-title;
     in property <string> apply-detail;
+    in property <bool> apply-enabled: true;
+    callback retry-apply-requested();
     background: transparent;
     VerticalLayout {
         spacing: 20px;
@@ -16,6 +19,10 @@ export component OverviewPage inherits Rectangle {
         Text { text: "查看设备连接、当前环境以及配置应用状态。"; color: Theme.muted; font-size: 14px; }
         DeviceCard { status-text: root.device-status; environment-text: root.environment-name; current-dpi: root.current-dpi; desired-dpi: root.desired-dpi; }
         StatusBanner { title: root.apply-title; detail: root.apply-detail; }
+        HorizontalLayout {
+            Rectangle { horizontal-stretch: 1; background: transparent; }
+            Button { text: "重新应用"; primary: true; enabled: root.apply-enabled; clicked => { root.retry-apply-requested(); } }
+        }
         Rectangle { vertical-stretch: 1; background: transparent; }
     }
 }
