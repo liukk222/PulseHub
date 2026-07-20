@@ -420,6 +420,18 @@ fn action_identity(
         ButtonActionConfig::LogicalControl { value } if value == "mouse:right" => {
             ("right", "右键点击", true)
         }
+        ButtonActionConfig::LogicalControl { value } if value == "mouse:middle" => {
+            ("middle", "鼠标中键", true)
+        }
+        ButtonActionConfig::LogicalControl { value } if value == "mouse:back" => {
+            ("side_back", "鼠标侧键（后）", true)
+        }
+        ButtonActionConfig::LogicalControl { value } if value == "mouse:forward" => {
+            ("side_forward", "鼠标侧键（前）", true)
+        }
+        ButtonActionConfig::LogicalControl { value } if value == "mouse:dpi_cycle" => {
+            ("dpi_cycle", "原本 DPI 切换", true)
+        }
         ButtonActionConfig::OnboardKeyboard {
             usage_page: 7,
             usage: 0x2a,
@@ -475,20 +487,32 @@ fn cycle_mapping(ui: &slint::Weak<AppWindow>, office: bool, index: i32) {
     if row.locked {
         return;
     }
-    let (id, label) = next_action(row.action_id.as_str());
+    let (id, label) = next_action(row.control_id.as_str(), row.action_id.as_str());
     row.action_id = id.into();
     row.action_label = label.into();
     model.set_row_data(index, row);
     ui.set_draft_dirty(true);
 }
 
-fn next_action(current: &str) -> (&'static str, &'static str) {
+fn next_action(control: &str, current: &str) -> (&'static str, &'static str) {
     match current {
+        "disabled" => original_action(control),
+        "middle" | "side_back" | "side_forward" | "dpi_cycle" => ("backspace", "Backspace"),
         "backspace" => ("paste", "Ctrl + V"),
         "paste" => ("copy", "Ctrl + C"),
         "copy" => ("select_all", "Ctrl + A"),
         "select_all" => ("disabled", "禁用"),
-        _ => ("backspace", "Backspace"),
+        _ => original_action(control),
+    }
+}
+
+fn original_action(control: &str) -> (&'static str, &'static str) {
+    match control {
+        "g102:middle" => ("middle", "鼠标中键"),
+        "g102:side_back" => ("side_back", "鼠标侧键（后）"),
+        "g102:side_forward" => ("side_forward", "鼠标侧键（前）"),
+        "g102:dpi" => ("dpi_cycle", "原本 DPI 切换"),
+        _ => ("disabled", "禁用"),
     }
 }
 
@@ -527,6 +551,18 @@ fn action_from_id(id: &str) -> Result<pulsehub_config_store::ButtonActionConfig,
         }),
         "right" => Ok(ButtonActionConfig::LogicalControl {
             value: "mouse:right".to_owned(),
+        }),
+        "middle" => Ok(ButtonActionConfig::LogicalControl {
+            value: "mouse:middle".to_owned(),
+        }),
+        "side_back" => Ok(ButtonActionConfig::LogicalControl {
+            value: "mouse:back".to_owned(),
+        }),
+        "side_forward" => Ok(ButtonActionConfig::LogicalControl {
+            value: "mouse:forward".to_owned(),
+        }),
+        "dpi_cycle" => Ok(ButtonActionConfig::LogicalControl {
+            value: "mouse:dpi_cycle".to_owned(),
         }),
         "backspace" => Ok(keyboard(0x2a, 0)),
         "paste" => Ok(keyboard(0x19, 1)),
@@ -870,9 +906,19 @@ mod tests {
 
     #[test]
     fn mapping_editor_cycles_only_through_supported_actions() {
-        assert_eq!(next_action("paste"), ("copy", "Ctrl + C"));
-        assert_eq!(next_action("select_all"), ("disabled", "禁用"));
-        assert_eq!(next_action("disabled"), ("backspace", "Backspace"));
+        assert_eq!(next_action("g102:side_back", "paste"), ("copy", "Ctrl + C"));
+        assert_eq!(
+            next_action("g102:side_back", "select_all"),
+            ("disabled", "禁用")
+        );
+        assert_eq!(
+            next_action("g102:side_back", "disabled"),
+            ("side_back", "鼠标侧键（后）")
+        );
+        assert_eq!(
+            next_action("g102:side_forward", "disabled"),
+            ("side_forward", "鼠标侧键（前）")
+        );
     }
 
     #[test]

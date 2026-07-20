@@ -413,10 +413,10 @@ fn office_button_mappings() -> Vec<ButtonMappingConfig> {
     [
         ("g102:left", logical("mouse:left")),
         ("g102:right", logical("mouse:right")),
-        ("g102:middle", keyboard(0x2a, 0)),
-        ("g102:side_back", keyboard(0x19, 1)),
-        ("g102:side_forward", keyboard(0x06, 1)),
-        ("g102:dpi", keyboard(0x04, 1)),
+        ("g102:middle", logical("mouse:middle")),
+        ("g102:side_back", logical("mouse:back")),
+        ("g102:side_forward", logical("mouse:forward")),
+        ("g102:dpi", logical("mouse:dpi_cycle")),
     ]
     .into_iter()
     .map(|(physical_control, action)| ButtonMappingConfig {
@@ -432,21 +432,13 @@ fn logical(value: &str) -> ButtonActionConfig {
     }
 }
 
-fn keyboard(usage: u16, modifiers: u8) -> ButtonActionConfig {
-    ButtonActionConfig::OnboardKeyboard {
-        usage_page: 0x07,
-        usage,
-        modifiers,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        ConfigDocument, ConfigError, ConfigRepository, SelectionMode, backup_path,
-        load_or_create_default, load_with_backup, save_atomic,
+        ButtonActionConfig, ConfigDocument, ConfigError, ConfigRepository, SelectionMode,
+        backup_path, load_or_create_default, load_with_backup, save_atomic,
     };
 
     #[test]
@@ -456,7 +448,7 @@ mod tests {
         let decoded = ConfigDocument::from_toml("config.toml".as_ref(), &text).unwrap();
         assert_eq!(decoded, document);
         assert!(text.contains("physical_control = \"g102:side_back\""));
-        assert!(text.contains("modifiers = 1"));
+        assert!(text.contains("value = \"mouse:back\""));
     }
 
     #[test]
@@ -467,6 +459,29 @@ mod tests {
             document.validate(),
             Err(ConfigError::Validation(_))
         ));
+    }
+
+    #[test]
+    fn first_run_defaults_keep_all_original_mouse_controls() {
+        let document = ConfigDocument::default();
+        for profile in [&document.profiles.office, &document.profiles.cs2] {
+            for (control, expected) in [
+                ("g102:left", "mouse:left"),
+                ("g102:right", "mouse:right"),
+                ("g102:middle", "mouse:middle"),
+                ("g102:side_back", "mouse:back"),
+                ("g102:side_forward", "mouse:forward"),
+                ("g102:dpi", "mouse:dpi_cycle"),
+            ] {
+                assert!(profile.button_mappings.iter().any(|mapping| {
+                    mapping.physical_control == control
+                        && matches!(
+                            &mapping.action,
+                            ButtonActionConfig::LogicalControl { value } if value == expected
+                        )
+                }));
+            }
+        }
     }
 
     #[test]
