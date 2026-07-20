@@ -11,7 +11,7 @@ use pulsehub_config_store::{
     ConfigDocument, ProfileName, SelectionMode, default_config_path, load_or_create_default,
 };
 use pulsehub_core::Environment;
-use pulsehub_device::hidpp::{HidppError, probe_first_g102, set_first_g102_dpi};
+use pulsehub_device::hidpp::{DpiWriteResult, HidppError, probe_first_g102, set_first_g102_dpi};
 use pulsehub_ipc::{AgentSnapshot, DeviceStatus, Environment as IpcEnvironment, PROTOCOL_VERSION};
 use pulsehub_profile::{
     EnvironmentTracker, ProcessRule, RetryBackoff, SelectionPolicy, select_environment_with_rules,
@@ -24,6 +24,7 @@ struct Arguments {
     watch_foreground: bool,
     serve_ipc_once: bool,
     serve_ipc: bool,
+    run_agent: bool,
     confirm_device_write: bool,
     exit_after_seconds: Option<u64>,
 }
@@ -88,7 +89,9 @@ fn main() -> ExitCode {
         config.profiles.office.dpi, config.profiles.cs2.dpi
     );
 
-    if arguments.watch_foreground {
+    if arguments.run_agent {
+        run_agent(&config, arguments.exit_after_seconds)
+    } else if arguments.watch_foreground {
         run_watcher(&config, arguments.exit_after_seconds)
     } else if arguments.serve_ipc {
         serve_ipc(&config, arguments.exit_after_seconds)
@@ -100,6 +103,150 @@ fn main() -> ExitCode {
         println!("未请求设备操作；使用 --help 查看前台识别与自动切换参数。");
         ExitCode::SUCCESS
     }
+}
+
+#[cfg(windows)]
+fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCode {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, RwLock, mpsc};
+    use std::thread;
+
+    use pulsehub_ipc::windows::{DEFAULT_PIPE_PATH, Server, connect, serve_connection_with};
+
+    let initial = match live_snapshot(config) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!("代理初始快照构造失败：{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let snapshot = Arc::new(RwLock::new(initial));
+    let stopping = Arc::new(AtomicBool::new(false));
+    let active_clients = Arc::new(AtomicUsize::new(0));
+    let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+    let ipc_thread = {
+        let snapshot = Arc::clone(&snapshot);
+        let stopping = Arc::clone(&stopping);
+        let active_clients = Arc::clone(&active_clients);
+        thread::spawn(move || {
+            let server = match Server::bind(DEFAULT_PIPE_PATH) {
+                Ok(server) => server,
+                Err(error) => {
+                    let _ = ready_tx.send(Err(error.to_string()));
+                    return;
+                }
+            };
+            let _ = ready_tx.send(Ok(()));
+            while !stopping.load(Ordering::Acquire) {
+                let mut stream = match server.accept() {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        eprintln!("IPC accept 失败：{error}");
+                        continue;
+                    }
+                };
+                if stopping.load(Ordering::Acquire) {
+                    break;
+                }
+                if active_clients.load(Ordering::Acquire) >= 4 {
+                    eprintln!("IPC 客户端已达上限，拒绝新连接。");
+                    continue;
+                }
+                active_clients.fetch_add(1, Ordering::AcqRel);
+                let snapshot = Arc::clone(&snapshot);
+                let active_clients = Arc::clone(&active_clients);
+                thread::spawn(move || {
+                    let result = serve_connection_with(&mut stream, || {
+                        snapshot
+                            .read()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .clone()
+                    });
+                    if let Err(error) = result {
+                        eprintln!("IPC 客户端会话失败：{error}");
+                    }
+                    active_clients.fetch_sub(1, Ordering::AcqRel);
+                });
+            }
+        })
+    };
+    match ready_rx.recv() {
+        Ok(Ok(())) => println!("统一代理已启动：前台监听 + HID 应用 + IPC 快照。"),
+        Ok(Err(error)) => {
+            eprintln!("IPC 管道创建失败：{error}");
+            return ExitCode::FAILURE;
+        }
+        Err(_) => {
+            eprintln!("IPC 启动线程意外退出。");
+            return ExitCode::FAILURE;
+        }
+    }
+
+    let mut tracker = EnvironmentTracker::default();
+    let mut backoff = RetryBackoff::default();
+    let result = watcher::run(
+        exit_after_seconds.map(Duration::from_secs),
+        Arc::clone(&stopping),
+        || {
+            let target = match resolve_target(config) {
+                Ok(target) => target,
+                Err(error) => {
+                    let delay = backoff.record_failure();
+                    eprintln!(
+                        "前台进程识别暂时失败：{error}；{} ms 后重试。",
+                        delay.as_millis()
+                    );
+                    return Some(delay);
+                }
+            };
+            if tracker.current() == Some(target.environment) {
+                return None;
+            }
+            print_target(
+                &target,
+                &snapshot_for_target(&target, 0, DeviceStatus::Unknown, None),
+            );
+            match apply_target(&target) {
+                Ok(applied) => {
+                    tracker.observe(target.environment);
+                    backoff.record_success();
+                    *snapshot
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                        snapshot_for_target(&target, 0, DeviceStatus::Ready, Some(applied.after));
+                    None
+                }
+                Err(error) if error.retryable => {
+                    let delay = backoff.record_failure();
+                    eprintln!("{}；{} ms 后重试。", error.message, delay.as_millis());
+                    Some(delay)
+                }
+                Err(error) => {
+                    eprintln!("{}；该错误不会自动重试。", error.message);
+                    None
+                }
+            }
+        },
+    );
+    stopping.store(true, Ordering::Release);
+    let _ = connect(DEFAULT_PIPE_PATH);
+    let _ = ipc_thread.join();
+    match result {
+        Ok(()) => {
+            println!("统一代理已停止，前台 hook 与 IPC listener 均已释放。");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("统一代理运行失败：{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn run_agent(_: &ConfigDocument, _: Option<u64>) -> ExitCode {
+    eprintln!("统一代理模式仅支持 Windows。");
+    ExitCode::FAILURE
 }
 
 #[cfg(windows)]
@@ -278,7 +425,7 @@ fn inspect_or_apply(config: &ConfigDocument, apply: bool) -> ExitCode {
         return ExitCode::SUCCESS;
     }
     match apply_target(&target) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(_) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{}", error.message);
             ExitCode::FAILURE
@@ -305,47 +452,54 @@ fn snapshot_for_target(
 }
 
 fn run_watcher(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCode {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
     let mut tracker = EnvironmentTracker::default();
     let mut backoff = RetryBackoff::default();
     println!("自动切换监听已启动；按 Ctrl+C 退出。仅切换运行态 DPI，不写入板载闪存。");
-    let result = watcher::run(exit_after_seconds.map(Duration::from_secs), || {
-        let target = match resolve_target(config) {
-            Ok(target) => target,
-            Err(error) => {
-                let delay = backoff.record_failure();
-                eprintln!(
-                    "前台进程识别暂时失败：{error}；{} ms 后重试。",
-                    delay.as_millis()
+    let result = watcher::run(
+        exit_after_seconds.map(Duration::from_secs),
+        Arc::new(AtomicBool::new(false)),
+        || {
+            let target = match resolve_target(config) {
+                Ok(target) => target,
+                Err(error) => {
+                    let delay = backoff.record_failure();
+                    eprintln!(
+                        "前台进程识别暂时失败：{error}；{} ms 后重试。",
+                        delay.as_millis()
+                    );
+                    return Some(delay);
+                }
+            };
+            if tracker.current() == Some(target.environment) {
+                println!(
+                    "前台进程：{}；环境仍为 {:?}，跳过重复应用。",
+                    target.executable_name, target.environment
                 );
-                return Some(delay);
+                return None;
             }
-        };
-        if tracker.current() == Some(target.environment) {
-            println!(
-                "前台进程：{}；环境仍为 {:?}，跳过重复应用。",
-                target.executable_name, target.environment
-            );
-            return None;
-        }
-        let snapshot = snapshot_for_target(&target, 0, DeviceStatus::Unknown, None);
-        print_target(&target, &snapshot);
-        match apply_target(&target) {
-            Ok(()) => {
-                tracker.observe(target.environment);
-                backoff.record_success();
-                None
+            let snapshot = snapshot_for_target(&target, 0, DeviceStatus::Unknown, None);
+            print_target(&target, &snapshot);
+            match apply_target(&target) {
+                Ok(_) => {
+                    tracker.observe(target.environment);
+                    backoff.record_success();
+                    None
+                }
+                Err(error) if error.retryable => {
+                    let delay = backoff.record_failure();
+                    eprintln!("{}；{} ms 后重试。", error.message, delay.as_millis());
+                    Some(delay)
+                }
+                Err(error) => {
+                    eprintln!("{}；该错误不会自动重试。", error.message);
+                    None
+                }
             }
-            Err(error) if error.retryable => {
-                let delay = backoff.record_failure();
-                eprintln!("{}；{} ms 后重试。", error.message, delay.as_millis());
-                Some(delay)
-            }
-            Err(error) => {
-                eprintln!("{}；该错误不会自动重试。", error.message);
-                None
-            }
-        }
-    });
+        },
+    );
     match result {
         Ok(()) => {
             println!("自动切换监听已停止，Windows event hook 已卸载。");
@@ -383,18 +537,18 @@ fn print_target(target: &EnvironmentTarget, snapshot: &AgentSnapshot) {
     );
 }
 
-fn apply_target(target: &EnvironmentTarget) -> Result<(), ApplyFailure> {
+fn apply_target(target: &EnvironmentTarget) -> Result<DpiWriteResult, ApplyFailure> {
     match set_first_g102_dpi(target.dpi, false) {
         Ok(result) if result.changed => {
             println!(
                 "运行态 DPI 已从 {} 设置为 {}，回读通过。",
                 result.before, result.after
             );
-            Ok(())
+            Ok(result)
         }
         Ok(result) => {
             println!("运行态 DPI 已是 {}，跳过重复写入。", result.after);
-            Ok(())
+            Ok(result)
         }
         Err(error) => {
             let retryable = !matches!(
@@ -440,6 +594,7 @@ fn parse_arguments() -> Result<Arguments, String> {
             "--watch-foreground" => parsed.watch_foreground = true,
             "--serve-ipc-once" => parsed.serve_ipc_once = true,
             "--serve-ipc" => parsed.serve_ipc = true,
+            "--run-agent" => parsed.run_agent = true,
             "--confirm-device-write" => parsed.confirm_device_write = true,
             "--exit-after-seconds" => {
                 let value = arguments
@@ -464,17 +619,21 @@ fn parse_arguments() -> Result<Arguments, String> {
         + u8::from(parsed.apply_current_environment)
         + u8::from(parsed.watch_foreground)
         + u8::from(parsed.serve_ipc_once)
-        + u8::from(parsed.serve_ipc);
+        + u8::from(parsed.serve_ipc)
+        + u8::from(parsed.run_agent);
     if modes > 1 {
         return Err("前台检查、单次应用和自动监听模式不能同时使用".to_owned());
     }
-    let writing = parsed.apply_current_environment || parsed.watch_foreground;
+    let writing = parsed.apply_current_environment || parsed.watch_foreground || parsed.run_agent;
     if writing != parsed.confirm_device_write {
         return Err("设备应用或自动监听必须与 --confirm-device-write 同时提供".to_owned());
     }
-    if parsed.exit_after_seconds.is_some() && !(parsed.watch_foreground || parsed.serve_ipc) {
+    if parsed.exit_after_seconds.is_some()
+        && !(parsed.watch_foreground || parsed.serve_ipc || parsed.run_agent)
+    {
         return Err(
-            "--exit-after-seconds 只能与 --watch-foreground 或 --serve-ipc 一起使用".to_owned(),
+            "--exit-after-seconds 只能与 --watch-foreground、--serve-ipc 或 --run-agent 一起使用"
+                .to_owned(),
         );
     }
     Ok(parsed)
@@ -488,11 +647,15 @@ fn print_help() {
     );
     println!("      pulsehub-agent --serve-ipc-once");
     println!("      pulsehub-agent --serve-ipc [--exit-after-seconds <1-3600>]");
+    println!(
+        "      pulsehub-agent --run-agent --confirm-device-write [--exit-after-seconds <1-3600>]"
+    );
     println!("  --inspect-foreground  只读显示前台进程、目标环境和 DPI");
     println!("  --apply-current-environment  按当前前台进程应用一次运行态 DPI");
     println!("  --watch-foreground  监听 Windows 前台事件并自动切换运行态 DPI");
     println!("  --serve-ipc-once  只读服务一个 IPC 客户端，断开后退出");
     println!("  --serve-ipc  启动最多 4 个并发客户端的只读 IPC 常驻服务");
+    println!("  --run-agent  同时运行前台监听、DPI 自动应用和 IPC 快照服务");
     println!("  --confirm-device-write  显式确认本次进程中的 DPI 设备写入");
     println!("  --exit-after-seconds  验证用的自动退出时间；省略时按 Ctrl+C 退出");
 }

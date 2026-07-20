@@ -1,14 +1,17 @@
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 #[cfg(windows)]
 pub fn run(
     exit_after: Option<Duration>,
+    stopping: Arc<AtomicBool>,
     mut on_foreground_changed: impl FnMut() -> Option<Duration>,
 ) -> Result<(), String> {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, mpsc};
+    use std::sync::atomic::Ordering;
+    use std::sync::mpsc;
     use std::time::Instant;
 
     use win_event_hook::events::{Event, NamedEvent};
@@ -24,7 +27,6 @@ pub fn run(
     })
     .map_err(|error| format!("安装 Windows 前台事件 hook 失败：{error}"))?;
 
-    let stopping = Arc::new(AtomicBool::new(false));
     let stopping_for_handler = Arc::clone(&stopping);
     ctrlc::set_handler(move || stopping_for_handler.store(true, Ordering::Release))
         .map_err(|error| format!("安装 Ctrl+C 处理器失败：{error}"))?;
@@ -58,6 +60,7 @@ pub fn run(
 #[cfg(not(windows))]
 pub fn run(
     _exit_after: Option<Duration>,
+    _stopping: Arc<AtomicBool>,
     _on_foreground_changed: impl FnMut() -> Option<Duration>,
 ) -> Result<(), String> {
     Err("前台事件监听当前仅支持 Windows".to_owned())

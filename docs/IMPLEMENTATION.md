@@ -817,7 +817,9 @@ payload_length bytes UTF-8 JSON
 前检查长度上限，`Session` 在成功处理 `hello` 前拒绝其他请求。单元测试覆盖正常往返、截断帧、
 超长帧、非法 UTF-8/JSON、未知字段/消息类型、版本不匹配以及响应信封不变量。Windows Named
 Pipe 帧传输、单连接会话、代理常驻 accept 循环、并发客户端上限和关机协调已实现；当前 logon
-SID 命名以及与前台环境监听共享同一实时状态所有者是下一实现单元。
+SID 命名是下一安全实现单元。开发期统一代理模式已经让前台环境监听、HID 应用和 IPC 服务共享
+同一个 `RwLock<AgentSnapshot>`；环境切换完成并通过设备回读后才发布新的环境、当前 DPI 和目标
+DPI。
 
 阶段 3 当前已增加开发期常驻模式 `--serve-ipc`：主线程阻塞在 `accept`，每个连接使用独立会话
 线程，最多允许 4 个活动客户端；每次请求从共享 `RwLock<AgentSnapshot>` 克隆最新快照，而不是
@@ -839,6 +841,19 @@ cargo run -p pulsehub-config -- --inspect-agent
 cargo run -p pulsehub-agent -- --serve-ipc --exit-after-seconds 30
 cargo run -p pulsehub-config -- --inspect-agent
 ~~~
+
+统一代理验证（允许运行态 DPI 写入，不写板载闪存）：
+
+~~~powershell
+cargo run -p pulsehub-agent -- --run-agent --confirm-device-write
+cargo run -p pulsehub-config -- --inspect-agent
+~~~
+
+`--run-agent` 在 IPC listener 就绪后安装前台 WinEvent hook。初始事件和后续环境变化均通过同一
+设备应用路径；写后回读成功才更新共享快照。Ctrl+C 或 `--exit-after-seconds` 结束监听后，主线程
+设置共享停止标志并自连接唤醒 IPC `accept`，最后等待 IPC 主线程退出。G102 实机已验证 Office
+前台时幂等保持 3200 DPI，IPC 同时返回 `ready / office / current=3200 / desired=3200`，退出时
+WinEvent hook 与 IPC listener 均释放。
 
 已验证输出能够从实际 `%APPDATA%\PulseHub\config.toml` 解析当前前台目标，查询 G102 的真实
 运行态 DPI，并经 `hello` 与 `get_snapshot` 返回脱敏快照。设备断开、忙或协议查询失败时仍返回
