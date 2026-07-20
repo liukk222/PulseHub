@@ -864,8 +864,13 @@ cargo run -p pulsehub-config -- --apply-agent
 普通 `--serve-ipc` 与 `--serve-ipc-once` 不接受 HID 修改。写入 POC 先完成 `hello`，随后代理在
 自己的线程中重新解析当前前台目标、调用既有 DPI 应用路径，并只在写后回读成功后返回包含真实
 `current_dpi` 的快照。G102 实机已完成 `3200 → 1600 → apply_now → 3200` 往返，三个阶段均有
-独立回读；未写入板载闪存。常驻统一代理中的 `apply_now` 仍须通过设备协调者命令队列实现，禁止
-直接在 IPC 客户端线程访问 HID。
+独立回读；未写入板载闪存。
+
+统一代理现已实现协调路径：IPC 会话线程把 `DeviceCommand::ApplyNow` 投递到容量 16 的有界
+队列，并通过容量 1 的响应通道最多等待 5 秒；队列满或超时返回可重试的 `PH-IPC-BUSY`。前台
+监听/设备协调线程排空命令，独占执行 HID 应用和回读，成功后先发布共享快照再响应客户端；IPC
+客户端线程不直接访问 HID。G102 实机已在统一代理运行期间完成外部临时写入 1600 DPI、常驻
+IPC `apply_now` 恢复 3200、随后 `get_snapshot` 回读 3200 的完整验证。
 
 已验证输出能够从实际 `%APPDATA%\PulseHub\config.toml` 解析当前前台目标，查询 G102 的真实
 运行态 DPI，并经 `hello` 与 `get_snapshot` 返回脱敏快照。设备断开、忙或协议查询失败时仍返回

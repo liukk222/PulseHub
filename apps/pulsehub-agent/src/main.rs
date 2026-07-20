@@ -44,6 +44,13 @@ struct ApplyFailure {
     retryable: bool,
 }
 
+#[cfg(windows)]
+enum DeviceCommand {
+    ApplyNow {
+        reply: std::sync::mpsc::SyncSender<Result<AgentSnapshot, ApplyFailure>>,
+    },
+}
+
 fn main() -> ExitCode {
     let arguments = match parse_arguments() {
         Ok(arguments) => arguments,
@@ -112,7 +119,10 @@ fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
     use std::sync::{Arc, RwLock, mpsc};
     use std::thread;
 
-    use pulsehub_ipc::windows::{Server, connect, default_pipe_path, serve_connection_with};
+    use pulsehub_ipc::windows::{
+        Server, connect, default_pipe_path, serve_connection_with_handler,
+    };
+    use pulsehub_ipc::{ErrorBody, ErrorCode, Request, Response};
 
     let pipe_path = match default_pipe_path() {
         Ok(path) => path,
@@ -132,11 +142,13 @@ fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
     let snapshot = Arc::new(RwLock::new(initial));
     let stopping = Arc::new(AtomicBool::new(false));
     let active_clients = Arc::new(AtomicUsize::new(0));
+    let (command_tx, command_rx) = mpsc::sync_channel::<DeviceCommand>(16);
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     let ipc_thread = {
         let snapshot = Arc::clone(&snapshot);
         let stopping = Arc::clone(&stopping);
         let active_clients = Arc::clone(&active_clients);
+        let command_tx = command_tx.clone();
         let pipe_path = pipe_path.clone();
         thread::spawn(move || {
             let server = match Server::bind(&pipe_path) {
@@ -165,13 +177,70 @@ fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
                 active_clients.fetch_add(1, Ordering::AcqRel);
                 let snapshot = Arc::clone(&snapshot);
                 let active_clients = Arc::clone(&active_clients);
+                let command_tx = command_tx.clone();
                 thread::spawn(move || {
-                    let result = serve_connection_with(&mut stream, || {
-                        snapshot
-                            .read()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .clone()
-                    });
+                    let result = serve_connection_with_handler(
+                        &mut stream,
+                        || {
+                            snapshot
+                                .read()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .clone()
+                        },
+                        |request, _| {
+                            if !matches!(request, Request::ApplyNow { .. }) {
+                                return None;
+                            }
+                            let (reply, receiver) = mpsc::sync_channel(1);
+                            match command_tx.try_send(DeviceCommand::ApplyNow { reply }) {
+                                Ok(()) => match receiver.recv_timeout(Duration::from_secs(5)) {
+                                    Ok(Ok(snapshot)) => Some(Response::success(
+                                        request.request_id(),
+                                        serde_json::to_value(snapshot)
+                                            .expect("AgentSnapshot 必须可序列化"),
+                                    )),
+                                    Ok(Err(error)) => Some(Response::failure(
+                                        request.request_id(),
+                                        ErrorBody {
+                                            code: if error.retryable {
+                                                ErrorCode::Busy
+                                            } else {
+                                                ErrorCode::Internal
+                                            },
+                                            message: error.message,
+                                            retryable: error.retryable,
+                                        },
+                                    )),
+                                    Err(_) => Some(Response::failure(
+                                        request.request_id(),
+                                        ErrorBody {
+                                            code: ErrorCode::Busy,
+                                            message: "设备协调者响应超时".to_owned(),
+                                            retryable: true,
+                                        },
+                                    )),
+                                },
+                                Err(mpsc::TrySendError::Full(_)) => Some(Response::failure(
+                                    request.request_id(),
+                                    ErrorBody {
+                                        code: ErrorCode::Busy,
+                                        message: "设备命令队列已满".to_owned(),
+                                        retryable: true,
+                                    },
+                                )),
+                                Err(mpsc::TrySendError::Disconnected(_)) => {
+                                    Some(Response::failure(
+                                        request.request_id(),
+                                        ErrorBody {
+                                            code: ErrorCode::Internal,
+                                            message: "设备协调者已停止".to_owned(),
+                                            retryable: false,
+                                        },
+                                    ))
+                                }
+                            }
+                        },
+                    );
                     if let Err(error) = result {
                         eprintln!("IPC 客户端会话失败：{error}");
                     }
@@ -194,6 +263,8 @@ fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
 
     let mut tracker = EnvironmentTracker::default();
     let mut backoff = RetryBackoff::default();
+    let foreground_snapshot = Arc::clone(&snapshot);
+    let command_snapshot = Arc::clone(&snapshot);
     let result = watcher::run(
         exit_after_seconds.map(Duration::from_secs),
         Arc::clone(&stopping),
@@ -220,7 +291,7 @@ fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
                 Ok(applied) => {
                     tracker.observe(target.environment);
                     backoff.record_success();
-                    *snapshot
+                    *foreground_snapshot
                         .write()
                         .unwrap_or_else(|poisoned| poisoned.into_inner()) =
                         snapshot_for_target(&target, 0, DeviceStatus::Ready, Some(applied.after));
@@ -235,6 +306,31 @@ fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
                     eprintln!("{}；该错误不会自动重试。", error.message);
                     None
                 }
+            }
+        },
+        || {
+            while let Ok(DeviceCommand::ApplyNow { reply }) = command_rx.try_recv() {
+                let result = resolve_target(config).and_then(|target| {
+                    apply_target(&target)
+                        .map(|applied| {
+                            let current = snapshot_for_target(
+                                &target,
+                                0,
+                                DeviceStatus::Ready,
+                                Some(applied.after),
+                            );
+                            *command_snapshot
+                                .write()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner()) = current.clone();
+                            current
+                        })
+                        .map_err(|error| error.message)
+                });
+                let result = result.map_err(|message| ApplyFailure {
+                    message,
+                    retryable: true,
+                });
+                let _ = reply.send(result);
             }
         },
     );
@@ -614,6 +710,7 @@ fn run_watcher(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> Exit
                 }
             }
         },
+        || {},
     );
     match result {
         Ok(()) => {

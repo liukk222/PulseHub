@@ -9,7 +9,10 @@ use interprocess::os::windows::named_pipe::{
 use interprocess::os::windows::security_descriptor::SecurityDescriptor;
 use widestring::U16CString;
 
-use crate::{AgentSnapshot, FrameError, Session, serve_next, serve_next_with};
+use crate::{
+    AgentSnapshot, ErrorBody, ErrorCode, FrameError, Request, Response, Session,
+    dispatch_accepted_request, read_request, serve_next, write_frame,
+};
 
 pub const PIPE_PATH_PREFIX: &str = r"\\.\pipe\PulseHub.Agent.";
 
@@ -75,13 +78,36 @@ pub fn serve_connection_with(
     stream: &mut ByteStream,
     snapshot: impl Fn() -> AgentSnapshot,
 ) -> Result<(), FrameError> {
+    serve_connection_with_handler(stream, snapshot, |_, _| None)
+}
+
+pub fn serve_connection_with_handler(
+    stream: &mut ByteStream,
+    snapshot: impl Fn() -> AgentSnapshot,
+    mut handler: impl FnMut(&Request, &AgentSnapshot) -> Option<Response>,
+) -> Result<(), FrameError> {
     let mut session = Session::default();
     loop {
-        match serve_next_with(stream, &mut session, &snapshot) {
-            Ok(()) => {}
+        let request = match read_request(stream) {
+            Ok(request) => request,
             Err(FrameError::Io(io::ErrorKind::UnexpectedEof)) => return Ok(()),
             Err(error) => return Err(error),
-        }
+        };
+        let current = snapshot();
+        let response = match session.accept(&request) {
+            Ok(()) => handler(&request, &current)
+                .unwrap_or_else(|| dispatch_accepted_request(&request, &current)),
+            Err(error) => Response::failure(
+                request.request_id(),
+                ErrorBody {
+                    code: ErrorCode::InvalidRequest,
+                    message: error.to_string(),
+                    retryable: false,
+                },
+            ),
+        };
+        response.validate().map_err(FrameError::Protocol)?;
+        write_frame(stream, &response)?;
     }
 }
 
@@ -197,6 +223,63 @@ mod tests {
         let stream =
             connect_with_retry(path, Duration::from_secs(1), Duration::from_millis(10)).unwrap();
         drop(stream);
+        server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn custom_handler_processes_apply_now_after_hello() {
+        let path = format!(
+            r"\\.\pipe\PulseHub.HandlerTest.{}.{}",
+            std::process::id(),
+            NEXT_PIPE.fetch_add(1, Ordering::Relaxed)
+        );
+        let server = Server::bind(&path).unwrap();
+        let snapshot = AgentSnapshot {
+            device_status: DeviceStatus::Ready,
+            active_environment: Environment::Office,
+            config_revision: 1,
+            current_dpi: Some(3200),
+            desired_dpi: 3200,
+        };
+        let server_thread = thread::spawn(move || {
+            let mut stream = server.accept().unwrap();
+            serve_connection_with_handler(
+                &mut stream,
+                || snapshot.clone(),
+                |request, _| {
+                    matches!(request, Request::ApplyNow { .. }).then(|| {
+                        Response::success(
+                            request.request_id(),
+                            serde_json::json!({"handled": true}),
+                        )
+                    })
+                },
+            )
+            .unwrap();
+        });
+        let mut client = connect(&path).unwrap();
+        write_frame(
+            &mut client,
+            &Request::Hello {
+                version: PROTOCOL_VERSION,
+                request_id: "hello-handler".to_owned(),
+                supported_versions: vec![PROTOCOL_VERSION],
+                client: "handler-test".to_owned(),
+            },
+        )
+        .unwrap();
+        let _: Response = read_frame(&mut client).unwrap();
+        write_frame(
+            &mut client,
+            &Request::ApplyNow {
+                version: PROTOCOL_VERSION,
+                request_id: "apply-handler".to_owned(),
+            },
+        )
+        .unwrap();
+        let response: Response = read_frame(&mut client).unwrap();
+        assert_eq!(response.data, Some(serde_json::json!({"handled": true})));
+        drop(client);
         server_thread.join().unwrap();
     }
 
