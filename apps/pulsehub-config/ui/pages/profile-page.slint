@@ -1,6 +1,7 @@
 import { Theme } from "../theme.slint";
 import { MappingItem } from "../models.slint";
 import { ScrollView } from "std-widgets.slint";
+import { Button, LineEdit } from "std-widgets.slint";
 
 export component ProfilePage inherits Rectangle {
     in property <string> profile-name;
@@ -10,7 +11,9 @@ export component ProfilePage inherits Rectangle {
     in property <bool> editing-enabled: true;
     in property <[MappingItem]> mappings;
     callback dpi-changed(int);
-    callback mapping-edit-requested(int);
+    callback custom-dpi-submitted(string);
+    callback mapping-input-requested(int);
+    callback mapping-restore-requested(int);
     background: transparent;
     ScrollView {
       viewport-width: self.width;
@@ -37,6 +40,21 @@ export component ProfilePage inherits Rectangle {
                         TouchArea { enabled: root.editing-enabled; clicked => { root.dpi-changed(value); } }
                     }
                 }
+                HorizontalLayout {
+                    spacing: 8px;
+                    custom-dpi := LineEdit {
+                        placeholder-text: "自行输入 DPI";
+                        input-type: InputType.number;
+                        enabled: root.editing-enabled;
+                        accepted(value) => { root.custom-dpi-submitted(value); }
+                    }
+                    Button {
+                        text: "确认";
+                        enabled: root.editing-enabled;
+                        clicked => { root.custom-dpi-submitted(custom-dpi.text); }
+                    }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                }
             }
         }
         Rectangle {
@@ -51,9 +69,10 @@ export component ProfilePage inherits Rectangle {
                         Text { text: mapping.label; color: Theme.ink; font-size: 14px; vertical-alignment: center; min-width: 150px; }
                         Rectangle { horizontal-stretch: 1; background: transparent; }
                         Text { text: mapping.action-label; color: mapping.locked ? Theme.muted : Theme.primary; font-size: 14px; vertical-alignment: center; }
-                        Text { text: mapping.locked ? "已保护" : "点击更改"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                        if mapping.locked: Text { text: "已保护"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                        if !mapping.locked: Button { text: "输入按键组合"; enabled: root.editing-enabled; clicked => { root.mapping-input-requested(index); } }
+                        if !mapping.locked: Button { text: "还原按键"; enabled: root.editing-enabled; clicked => { root.mapping-restore-requested(index); } }
                     }
-                    TouchArea { enabled: root.editing-enabled && !mapping.locked; clicked => { root.mapping-edit-requested(index); } }
                 }
             }
         }

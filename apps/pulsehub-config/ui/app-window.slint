@@ -15,7 +15,6 @@ export component AppWindow inherits Window {
     in-out property <bool> close-dialog-visible: false;
     in-out property <bool> close-after-save: false;
     in-out property <bool> mapping-editor-visible: false;
-    in-out property <bool> mapping-capture-active: false;
     in-out property <bool> mapping-editor-office: true;
     in-out property <int> mapping-editor-index: -1;
     in-out property <string> mapping-editor-label: "";
@@ -28,6 +27,9 @@ export component AppWindow inherits Window {
     in-out property <int> office-dpi: 3200;
     in-out property <int> cs2-dpi: 100;
     in property <[int]> dpi-options;
+    in property <int> dpi-minimum: 1;
+    in property <int> dpi-maximum: 65535;
+    in property <int> dpi-step: 1;
     in property <[MappingItem]> office-mappings;
     in property <[MappingItem]> cs2-mappings;
     in-out property <string> selection-mode: "自动";
@@ -47,6 +49,7 @@ export component AppWindow inherits Window {
     callback discard-requested();
     callback mapping-restore-requested(bool, int);
     callback mapping-key-requested(bool, int, string, bool, bool, bool, bool);
+    callback custom-dpi-requested(bool, string);
     callback discard-and-close-requested();
     callback retry-apply-requested();
 
@@ -77,8 +80,8 @@ export component AppWindow inherits Window {
             Rectangle {
                 horizontal-stretch: 1; background: Theme.canvas;
                 if root.selected-page == 0: OverviewPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; device-status: root.device-status; environment-name: root.environment-name; current-dpi: root.current-dpi; desired-dpi: root.desired-dpi; apply-title: root.save-title; apply-detail: root.save-detail; apply-enabled: !root.busy && !root.draft-dirty; retry-apply-requested => { root.retry-apply-requested(); } }
-                if root.selected-page == 1: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "Office"; dpi: root.office-dpi; dpi-options: root.dpi-options; mappings: root.office-mappings; process-rule: ""; editing-enabled: !root.busy; dpi-changed(value) => { root.office-dpi = value; root.draft-dirty = true; } mapping-edit-requested(index) => { root.open-mapping-editor(true, index); } }
-                if root.selected-page == 2: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "CS2"; dpi: root.cs2-dpi; dpi-options: root.dpi-options; mappings: root.cs2-mappings; process-rule: "cs2.exe"; editing-enabled: !root.busy; dpi-changed(value) => { root.cs2-dpi = value; root.draft-dirty = true; } mapping-edit-requested(index) => { root.open-mapping-editor(false, index); } }
+                if root.selected-page == 1: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "Office"; dpi: root.office-dpi; dpi-options: root.dpi-options; mappings: root.office-mappings; process-rule: ""; editing-enabled: !root.busy; dpi-changed(value) => { root.office-dpi = value; root.draft-dirty = true; } custom-dpi-submitted(value) => { root.custom-dpi-requested(true, value); } mapping-input-requested(index) => { root.open-mapping-capture(true, index); } mapping-restore-requested(index) => { root.mapping-restore-requested(true, index); } }
+                if root.selected-page == 2: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "CS2"; dpi: root.cs2-dpi; dpi-options: root.dpi-options; mappings: root.cs2-mappings; process-rule: "cs2.exe"; editing-enabled: !root.busy; dpi-changed(value) => { root.cs2-dpi = value; root.draft-dirty = true; } custom-dpi-submitted(value) => { root.custom-dpi-requested(false, value); } mapping-input-requested(index) => { root.open-mapping-capture(false, index); } mapping-restore-requested(index) => { root.mapping-restore-requested(false, index); } }
                 if root.selected-page == 3: SettingsPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; revision: root.revision; selection-mode: root.selection-mode; start-with-windows: root.start-with-windows; integration-status: root.integration-status; editing-enabled: !root.busy; selection-mode-cycle => { root.selection-mode = root.selection-mode == "自动" ? "固定 Office" : root.selection-mode == "固定 Office" ? "固定 CS2" : "自动"; root.draft-dirty = true; } start-with-windows-toggle => { root.start-with-windows = !root.start-with-windows; root.draft-dirty = true; } }
             }
         }
@@ -92,11 +95,10 @@ export component AppWindow inherits Window {
             }
         }
     }
-    function open-mapping-editor(office: bool, index: int) {
+    function open-mapping-capture(office: bool, index: int) {
         root.mapping-editor-office = office;
         root.mapping-editor-index = index;
         root.mapping-editor-label = office ? root.office-mappings[index].label : root.cs2-mappings[index].label;
-        root.mapping-capture-active = false;
         root.captured-key = "";
         root.captured-preview = "尚未输入";
         root.mapping-editor-visible = true;
@@ -104,18 +106,12 @@ export component AppWindow inherits Window {
     if root.mapping-editor-visible: Rectangle {
         x: 0px; y: 0px; width: parent.width; height: parent.height; background: Theme.overlay;
         Rectangle {
-            width: 500px; height: root.mapping-capture-active ? 300px : 250px;
+            width: 500px; height: 300px;
             x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px;
             VerticalLayout { padding: 24px; spacing: 16px;
                 Text { text: "更改 " + root.mapping-editor-label; color: Theme.ink; font-size: 18px; font-weight: 600; }
-                if !root.mapping-capture-active: VerticalLayout {
-                    spacing: 12px;
-                    Text { text: "请选择设置方式"; color: Theme.body; font-size: 14px; }
-                    Button { text: "输入按键组合"; primary: true; clicked => { root.mapping-capture-active = true; } }
-                    Button { text: "还原按键"; clicked => { root.mapping-restore-requested(root.mapping-editor-office, root.mapping-editor-index); root.mapping-editor-visible = false; } }
-                }
-                if root.mapping-capture-active: VerticalLayout {
+                VerticalLayout {
                     spacing: 12px;
                     Text { text: "请按一个按键或组合键，然后按 Enter 保存"; color: Theme.body; font-size: 14px; }
                     Rectangle {

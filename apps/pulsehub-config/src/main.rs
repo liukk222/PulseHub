@@ -153,6 +153,10 @@ fn run_gui() -> ExitCode {
             meta,
         )
     });
+    let dpi_ui = ui.as_weak();
+    ui.on_custom_dpi_requested(move |office, value| {
+        set_custom_dpi(&dpi_ui, office, value.as_str())
+    });
 
     let discard_ui = ui.as_weak();
     ui.on_discard_requested(move || refresh_gui(discard_ui.clone()));
@@ -303,6 +307,11 @@ fn apply_gui_state(
         })
         .unwrap_or_default();
     ui.set_dpi_options(ModelRc::new(VecModel::from(dpi_values)));
+    if let Some(capability) = &snapshot.dpi_capability {
+        ui.set_dpi_minimum(capability.minimum.into());
+        ui.set_dpi_maximum(capability.maximum.into());
+        ui.set_dpi_step(capability.step.unwrap_or(1).into());
+    }
     ui.set_office_dpi(config.profiles.office.dpi.into());
     ui.set_cs2_dpi(config.profiles.cs2.dpi.into());
     ui.set_office_mappings(mapping_model(&config.profiles.office.button_mappings));
@@ -491,6 +500,44 @@ fn restore_mapping(ui: &slint::Weak<AppWindow>, office: bool, index: i32) {
     };
     let (id, label) = original_action(row.control_id.as_str());
     update_mapping_row(&ui, &model, index, id, label);
+}
+
+#[cfg(windows)]
+fn set_custom_dpi(ui: &slint::Weak<AppWindow>, office: bool, text: &str) {
+    let Some(ui) = ui.upgrade() else { return };
+    let minimum = ui.get_dpi_minimum();
+    let maximum = ui.get_dpi_maximum();
+    let step = ui.get_dpi_step().max(1);
+    let value = match validate_custom_dpi(text, minimum, maximum, step) {
+        Ok(value) => value,
+        Err(error) => {
+            ui.set_save_title("DPI 输入无效".into());
+            ui.set_save_detail(error.into());
+            return;
+        }
+    };
+    if office {
+        ui.set_office_dpi(value);
+    } else {
+        ui.set_cs2_dpi(value);
+    }
+    ui.set_draft_dirty(true);
+    ui.set_save_title("自定义 DPI 已加入草稿".into());
+    ui.set_save_detail(format!("{value} DPI 将在保存配置后生效。").into());
+}
+
+fn validate_custom_dpi(text: &str, minimum: i32, maximum: i32, step: i32) -> Result<i32, String> {
+    let value = text
+        .trim()
+        .parse::<i32>()
+        .map_err(|_| "请输入只包含数字的 DPI 值。".to_owned())?;
+    let step = step.max(1);
+    if value < minimum || value > maximum || (value - minimum) % step != 0 {
+        return Err(format!(
+            "请输入 {minimum}–{maximum} 且符合 {step} DPI 步进的值。"
+        ));
+    }
+    Ok(value)
 }
 
 #[cfg(windows)]
@@ -1066,7 +1113,7 @@ mod tests {
     use super::{
         apply_mapping_selections, captured_keyboard_action, is_revision_conflict,
         keyboard_usage_from_key, selection_mode_from_label, selection_mode_label,
-        should_prompt_before_close,
+        should_prompt_before_close, validate_custom_dpi,
     };
 
     #[test]
@@ -1086,6 +1133,14 @@ mod tests {
             Ok((0x2a, 0, "Backspace".to_owned()))
         );
         assert_eq!(keyboard_usage_from_key("中"), None);
+    }
+
+    #[test]
+    fn custom_dpi_respects_device_range_and_step() {
+        assert_eq!(validate_custom_dpi(" 1250 ", 50, 8000, 50), Ok(1250));
+        assert!(validate_custom_dpi("1255", 50, 8000, 50).is_err());
+        assert!(validate_custom_dpi("9000", 50, 8000, 50).is_err());
+        assert!(validate_custom_dpi("fast", 50, 8000, 50).is_err());
     }
 
     #[test]
