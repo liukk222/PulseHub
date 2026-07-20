@@ -23,6 +23,7 @@ struct Arguments {
     apply_current_environment: bool,
     watch_foreground: bool,
     serve_ipc_once: bool,
+    serve_ipc_apply_once: bool,
     serve_ipc: bool,
     run_agent: bool,
     confirm_device_write: bool,
@@ -95,8 +96,8 @@ fn main() -> ExitCode {
         run_watcher(&config, arguments.exit_after_seconds)
     } else if arguments.serve_ipc {
         serve_ipc(&config, arguments.exit_after_seconds)
-    } else if arguments.serve_ipc_once {
-        serve_ipc_once(&config)
+    } else if arguments.serve_ipc_once || arguments.serve_ipc_apply_once {
+        serve_ipc_once(&config, arguments.serve_ipc_apply_once)
     } else if arguments.inspect_foreground || arguments.apply_current_environment {
         inspect_or_apply(&config, arguments.apply_current_environment)
     } else {
@@ -259,7 +260,7 @@ fn run_agent(_: &ConfigDocument, _: Option<u64>) -> ExitCode {
 }
 
 #[cfg(windows)]
-fn serve_ipc_once(config: &ConfigDocument) -> ExitCode {
+fn serve_ipc_once(config: &ConfigDocument, allow_apply: bool) -> ExitCode {
     use pulsehub_ipc::windows::{Server, default_pipe_path};
 
     let pipe_path = match default_pipe_path() {
@@ -293,6 +294,9 @@ fn serve_ipc_once(config: &ConfigDocument) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if allow_apply {
+        return serve_ipc_apply_session(config, &mut stream, snapshot);
+    }
     match server.serve_connection(&mut stream, &snapshot) {
         Ok(()) => {
             println!("IPC 客户端已断开，单连接验证服务停止。");
@@ -301,6 +305,92 @@ fn serve_ipc_once(config: &ConfigDocument) -> ExitCode {
         Err(error) => {
             eprintln!("IPC 会话失败：{error}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(windows)]
+fn serve_ipc_apply_session(
+    config: &ConfigDocument,
+    stream: &mut pulsehub_ipc::windows::ByteStream,
+    mut snapshot: AgentSnapshot,
+) -> ExitCode {
+    use pulsehub_ipc::{
+        ErrorBody, ErrorCode, Request, Response, Session, dispatch_accepted_request, read_request,
+        write_frame,
+    };
+
+    let mut session = Session::default();
+    loop {
+        let request = match read_request(stream) {
+            Ok(request) => request,
+            Err(pulsehub_ipc::FrameError::Io(std::io::ErrorKind::UnexpectedEof)) => {
+                return ExitCode::SUCCESS;
+            }
+            Err(error) => {
+                eprintln!("IPC 请求读取失败：{error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let response = if let Err(error) = session.accept(&request) {
+            Response::failure(
+                request.request_id(),
+                ErrorBody {
+                    code: ErrorCode::InvalidRequest,
+                    message: error.to_string(),
+                    retryable: false,
+                },
+            )
+        } else if matches!(request, Request::ApplyNow { .. }) {
+            let target = match resolve_target(config) {
+                Ok(target) => target,
+                Err(error) => {
+                    let response = Response::failure(
+                        request.request_id(),
+                        ErrorBody {
+                            code: ErrorCode::Internal,
+                            message: error,
+                            retryable: true,
+                        },
+                    );
+                    if write_frame(stream, &response).is_err() {
+                        return ExitCode::FAILURE;
+                    }
+                    continue;
+                }
+            };
+            match apply_target(&target) {
+                Ok(applied) => {
+                    snapshot = snapshot_for_target(
+                        &target,
+                        snapshot.config_revision,
+                        DeviceStatus::Ready,
+                        Some(applied.after),
+                    );
+                    Response::success(
+                        request.request_id(),
+                        serde_json::to_value(&snapshot).expect("AgentSnapshot 必须可序列化"),
+                    )
+                }
+                Err(error) => Response::failure(
+                    request.request_id(),
+                    ErrorBody {
+                        code: if error.retryable {
+                            ErrorCode::Busy
+                        } else {
+                            ErrorCode::Internal
+                        },
+                        message: error.message,
+                        retryable: error.retryable,
+                    },
+                ),
+            }
+        } else {
+            dispatch_accepted_request(&request, &snapshot)
+        };
+        if let Err(error) = write_frame(stream, &response) {
+            eprintln!("IPC 响应写入失败：{error}");
+            return ExitCode::FAILURE;
         }
     }
 }
@@ -430,7 +520,7 @@ fn live_snapshot(config: &ConfigDocument) -> Result<AgentSnapshot, String> {
 }
 
 #[cfg(not(windows))]
-fn serve_ipc_once(_: &ConfigDocument) -> ExitCode {
+fn serve_ipc_once(_: &ConfigDocument, _: bool) -> ExitCode {
     eprintln!("IPC Named Pipe 验证模式仅支持 Windows。");
     ExitCode::FAILURE
 }
@@ -618,6 +708,7 @@ fn parse_arguments() -> Result<Arguments, String> {
             "--apply-current-environment" => parsed.apply_current_environment = true,
             "--watch-foreground" => parsed.watch_foreground = true,
             "--serve-ipc-once" => parsed.serve_ipc_once = true,
+            "--serve-ipc-apply-once" => parsed.serve_ipc_apply_once = true,
             "--serve-ipc" => parsed.serve_ipc = true,
             "--run-agent" => parsed.run_agent = true,
             "--confirm-device-write" => parsed.confirm_device_write = true,
@@ -644,12 +735,16 @@ fn parse_arguments() -> Result<Arguments, String> {
         + u8::from(parsed.apply_current_environment)
         + u8::from(parsed.watch_foreground)
         + u8::from(parsed.serve_ipc_once)
+        + u8::from(parsed.serve_ipc_apply_once)
         + u8::from(parsed.serve_ipc)
         + u8::from(parsed.run_agent);
     if modes > 1 {
         return Err("前台检查、单次应用和自动监听模式不能同时使用".to_owned());
     }
-    let writing = parsed.apply_current_environment || parsed.watch_foreground || parsed.run_agent;
+    let writing = parsed.apply_current_environment
+        || parsed.watch_foreground
+        || parsed.run_agent
+        || parsed.serve_ipc_apply_once;
     if writing != parsed.confirm_device_write {
         return Err("设备应用或自动监听必须与 --confirm-device-write 同时提供".to_owned());
     }
@@ -671,6 +766,7 @@ fn print_help() {
         "      pulsehub-agent --watch-foreground --confirm-device-write [--exit-after-seconds <1-3600>]"
     );
     println!("      pulsehub-agent --serve-ipc-once");
+    println!("      pulsehub-agent --serve-ipc-apply-once --confirm-device-write");
     println!("      pulsehub-agent --serve-ipc [--exit-after-seconds <1-3600>]");
     println!(
         "      pulsehub-agent --run-agent --confirm-device-write [--exit-after-seconds <1-3600>]"
@@ -679,6 +775,7 @@ fn print_help() {
     println!("  --apply-current-environment  按当前前台进程应用一次运行态 DPI");
     println!("  --watch-foreground  监听 Windows 前台事件并自动切换运行态 DPI");
     println!("  --serve-ipc-once  只读服务一个 IPC 客户端，断开后退出");
+    println!("  --serve-ipc-apply-once  允许单个已协商客户端请求 apply_now");
     println!("  --serve-ipc  启动最多 4 个并发客户端的只读 IPC 常驻服务");
     println!("  --run-agent  同时运行前台监听、DPI 自动应用和 IPC 快照服务");
     println!("  --confirm-device-write  显式确认本次进程中的 DPI 设备写入");

@@ -9,7 +9,8 @@ use pulsehub_ipc::{AgentSnapshot, PROTOCOL_VERSION, Request, Response, read_fram
 
 fn main() -> ExitCode {
     match env::args().nth(1).as_deref() {
-        Some("--inspect-agent") => inspect_agent(),
+        Some("--inspect-agent") => inspect_agent(false),
+        Some("--apply-agent") => inspect_agent(true),
         Some("-h" | "--help") => {
             print_help();
             ExitCode::SUCCESS
@@ -28,7 +29,7 @@ fn main() -> ExitCode {
 }
 
 #[cfg(windows)]
-fn inspect_agent() -> ExitCode {
+fn inspect_agent(apply: bool) -> ExitCode {
     use pulsehub_ipc::windows::{connect_with_retry, default_pipe_path};
 
     let pipe_path = match default_pipe_path() {
@@ -60,9 +61,16 @@ fn inspect_agent() -> ExitCode {
         eprintln!("IPC 版本协商失败：{error}");
         return ExitCode::FAILURE;
     }
-    let request = Request::GetSnapshot {
-        version: PROTOCOL_VERSION,
-        request_id: "config-snapshot-1".to_owned(),
+    let request = if apply {
+        Request::ApplyNow {
+            version: PROTOCOL_VERSION,
+            request_id: "config-apply-1".to_owned(),
+        }
+    } else {
+        Request::GetSnapshot {
+            version: PROTOCOL_VERSION,
+            request_id: "config-snapshot-1".to_owned(),
+        }
     };
     let response = match exchange(&mut stream, &request) {
         Ok(response) => response,
@@ -83,7 +91,12 @@ fn inspect_agent() -> ExitCode {
         }
     };
     println!(
-        "代理快照：设备={:?}，环境={:?}，当前 DPI={}，目标 DPI={}，配置修订={}",
+        "{}：设备={:?}，环境={:?}，当前 DPI={}，目标 DPI={}，配置修订={}",
+        if apply {
+            "应用完成"
+        } else {
+            "代理快照"
+        },
         snapshot.device_status,
         snapshot.active_environment,
         snapshot
@@ -114,12 +127,13 @@ fn exchange(
 }
 
 #[cfg(not(windows))]
-fn inspect_agent() -> ExitCode {
+fn inspect_agent(_: bool) -> ExitCode {
     eprintln!("IPC Named Pipe 客户端仅支持 Windows。");
     ExitCode::FAILURE
 }
 
 fn print_help() {
-    println!("用法：pulsehub-config [--inspect-agent]");
+    println!("用法：pulsehub-config [--inspect-agent | --apply-agent]");
     println!("  --inspect-agent  连接代理并读取只读脱敏快照");
+    println!("  --apply-agent  请求代理应用当前前台环境并返回回读快照");
 }

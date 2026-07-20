@@ -854,6 +854,19 @@ cargo run -p pulsehub-config -- --inspect-agent
 前台时幂等保持 3200 DPI，IPC 同时返回 `ready / office / current=3200 / desired=3200`，退出时
 WinEvent hook 与 IPC listener 均释放。
 
+受控 `apply_now` 写入 POC 使用独立单连接模式，必须在代理进程侧显式确认设备写入：
+
+~~~powershell
+cargo run -p pulsehub-agent -- --serve-ipc-apply-once --confirm-device-write
+cargo run -p pulsehub-config -- --apply-agent
+~~~
+
+普通 `--serve-ipc` 与 `--serve-ipc-once` 不接受 HID 修改。写入 POC 先完成 `hello`，随后代理在
+自己的线程中重新解析当前前台目标、调用既有 DPI 应用路径，并只在写后回读成功后返回包含真实
+`current_dpi` 的快照。G102 实机已完成 `3200 → 1600 → apply_now → 3200` 往返，三个阶段均有
+独立回读；未写入板载闪存。常驻统一代理中的 `apply_now` 仍须通过设备协调者命令队列实现，禁止
+直接在 IPC 客户端线程访问 HID。
+
 已验证输出能够从实际 `%APPDATA%\PulseHub\config.toml` 解析当前前台目标，查询 G102 的真实
 运行态 DPI，并经 `hello` 与 `get_snapshot` 返回脱敏快照。设备断开、忙或协议查询失败时仍返回
 对应的降级状态和 `current_dpi = null`，不得把目标 DPI 伪装成硬件当前值。

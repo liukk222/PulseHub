@@ -340,6 +340,11 @@ pub fn dispatch_request(
             },
         );
     }
+    dispatch_accepted_request(request, snapshot)
+}
+
+pub fn dispatch_accepted_request(request: &Request, snapshot: &AgentSnapshot) -> Response {
+    let request_id = request.request_id().to_owned();
     match request {
         Request::Hello { .. } => Response::success(
             request_id,

@@ -978,6 +978,7 @@ dependencies = [
  "pulsehub-device",
  "pulsehub-ipc",
  "pulsehub-profile",
+ "serde_json",
  "single-instance",
  "win_event_hook",
 ]
