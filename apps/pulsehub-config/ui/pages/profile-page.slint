@@ -1,5 +1,6 @@
 import { Theme } from "../theme.slint";
 import { MappingItem } from "../models.slint";
+import { ScrollView } from "std-widgets.slint";
 
 export component ProfilePage inherits Rectangle {
     in property <string> profile-name;
@@ -11,7 +12,12 @@ export component ProfilePage inherits Rectangle {
     callback dpi-changed(int);
     callback mapping-cycle-requested(int);
     background: transparent;
-    VerticalLayout {
+    ScrollView {
+      viewport-width: self.width;
+      viewport-height: content.preferred-height;
+      horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+      content := VerticalLayout {
+        width: parent.width - 14px;
         spacing: 20px;
         Text { text: root.profile-name + " 配置"; color: Theme.ink; font-size: 26px; font-weight: 600; }
         Text { text: root.profile-name == "CS2" ? "进入 " + root.process-rule + " 时自动使用此配置。" : "适合桌面、浏览器和办公软件。"; color: Theme.muted; font-size: 14px; }
@@ -51,6 +57,7 @@ export component ProfilePage inherits Rectangle {
                 }
             }
         }
-        Rectangle { vertical-stretch: 1; background: transparent; }
+        Rectangle { min-height: 1px; background: transparent; }
+      }
     }
 }

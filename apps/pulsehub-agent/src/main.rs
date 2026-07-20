@@ -11,11 +11,14 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use pulsehub_config_store::{
-    ConfigDocument, ConfigError, ConfigRepository, ProfileName, SelectionMode, default_config_path,
-    load_or_create_default,
+    ButtonActionConfig, ConfigDocument, ConfigError, ConfigRepository, ProfileConfig, ProfileName,
+    SelectionMode, default_config_path, load_or_create_default,
 };
 use pulsehub_core::Environment;
-use pulsehub_device::hidpp::{DpiWriteResult, HidppError, probe_first_g102, set_first_g102_dpi};
+use pulsehub_device::hidpp::{
+    DpiWriteResult, HidppError, OnboardButtonAction, activate_first_g102_onboard_mode,
+    apply_first_g102_profile, probe_first_g102, set_first_g102_dpi,
+};
 use pulsehub_ipc::{
     AgentSnapshot, DeviceStatus, DpiCapability, Environment as IpcEnvironment, IntegrationStatus,
     PROTOCOL_VERSION,
@@ -43,6 +46,7 @@ struct EnvironmentTarget {
     process_id: u64,
     environment: Environment,
     dpi: u16,
+    button_actions: [OnboardButtonAction; 6],
 }
 
 #[derive(Debug)]
@@ -223,6 +227,11 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                                 .clone()
                         },
                         |request, _| {
+                            let reply_timeout = if matches!(request, Request::ApplyNow { .. }) {
+                                Duration::from_secs(15)
+                            } else {
+                                Duration::from_secs(5)
+                            };
                             let (reply, receiver) = mpsc::sync_channel(1);
                             let command = match request {
                                 Request::ApplyNow { .. } => DeviceCommand::ApplyNow { reply },
@@ -247,7 +256,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                                 _ => return None,
                             };
                             match command_tx.try_send(command) {
-                                Ok(()) => match receiver.recv_timeout(Duration::from_secs(5)) {
+                                Ok(()) => match receiver.recv_timeout(reply_timeout) {
                                     Ok(Ok(data)) => {
                                         Some(Response::success(request.request_id(), data))
                                     }
@@ -341,7 +350,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                     None,
                 ),
             );
-            match apply_target(&target) {
+            match apply_target_dpi(&target) {
                 Ok(applied) => {
                     tracker.observe(target.environment);
                     backoff.record_success();
@@ -385,7 +394,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                                 retryable: true,
                             })
                             .and_then(|target| {
-                                apply_target(&target)
+                                apply_target_full(&target)
                                     .map_err(|error| CommandFailure {
                                         code: if error.retryable {
                                             ErrorCode::Busy
@@ -664,7 +673,7 @@ fn serve_ipc_apply_session(
                     continue;
                 }
             };
-            match apply_target(&target) {
+            match apply_target_dpi(&target) {
                 Ok(applied) => {
                     let capability = snapshot.dpi_capability.clone();
                     let integration_status = snapshot.integration_status;
@@ -863,7 +872,7 @@ fn inspect_or_apply(config: &ConfigDocument, apply: bool) -> ExitCode {
         println!("只读识别完成，未写入设备。");
         return ExitCode::SUCCESS;
     }
-    match apply_target(&target) {
+    match apply_target_dpi(&target) {
         Ok(_) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{}", error.message);
@@ -996,7 +1005,7 @@ fn run_watcher(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> Exit
             }
             let snapshot = snapshot_for_target(&target, 0, DeviceStatus::Unknown, None);
             print_target(&target, &snapshot);
-            match apply_target(&target) {
+            match apply_target_dpi(&target) {
                 Ok(_) => {
                     tracker.observe(target.environment);
                     backoff.record_success();
@@ -1030,16 +1039,87 @@ fn run_watcher(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> Exit
 fn resolve_target(config: &ConfigDocument) -> Result<EnvironmentTarget, String> {
     let foreground = foreground::current()?;
     let environment = selected_environment(config, Some(&foreground.executable_name));
-    let dpi = match environment {
-        Environment::Office => config.profiles.office.dpi,
-        Environment::Cs2 => config.profiles.cs2.dpi,
+    let profile = match environment {
+        Environment::Office => &config.profiles.office,
+        Environment::Cs2 => &config.profiles.cs2,
     };
+    let dpi = profile.dpi;
+    let button_actions = button_actions_for_profile(profile)?;
     Ok(EnvironmentTarget {
         executable_name: foreground.executable_name,
         process_id: foreground.process_id,
         environment,
         dpi,
+        button_actions,
     })
+}
+
+fn button_actions_for_profile(profile: &ProfileConfig) -> Result<[OnboardButtonAction; 6], String> {
+    const CONTROLS: [&str; 6] = [
+        "g102:left",
+        "g102:right",
+        "g102:middle",
+        "g102:side_back",
+        "g102:side_forward",
+        "g102:dpi",
+    ];
+    let mut actions = std::array::from_fn(|_| OnboardButtonAction::Disabled);
+    let mut assigned = [false; 6];
+    for mapping in &profile.button_mappings {
+        let index = CONTROLS
+            .iter()
+            .position(|control| *control == mapping.physical_control)
+            .ok_or_else(|| format!("不支持的 G102 物理按键：{}", mapping.physical_control))?;
+        actions[index] = onboard_action_from_config(&mapping.action)?;
+        assigned[index] = true;
+    }
+    if let Some(index) = assigned.iter().position(|assigned| !assigned) {
+        return Err(format!("配置缺少 G102 按键映射：{}", CONTROLS[index]));
+    }
+    Ok(actions)
+}
+
+fn onboard_action_from_config(action: &ButtonActionConfig) -> Result<OnboardButtonAction, String> {
+    match action {
+        ButtonActionConfig::LogicalControl { value } => match value.as_str() {
+            "mouse:left" => Ok(mouse_button_action(1)),
+            "mouse:right" => Ok(mouse_button_action(2)),
+            "mouse:middle" => Ok(mouse_button_action(3)),
+            "mouse:back" => Ok(mouse_button_action(4)),
+            "mouse:forward" => Ok(mouse_button_action(5)),
+            "mouse:dpi_cycle" => Ok(OnboardButtonAction::Special {
+                code: 0x05,
+                profile: 0,
+            }),
+            value => Err(format!("不支持的板载逻辑动作：{value}")),
+        },
+        ButtonActionConfig::OnboardKeyboard {
+            usage_page,
+            usage,
+            modifiers,
+        } => {
+            if *usage_page != 0x07 || *usage > u16::from(u8::MAX) {
+                return Err(format!(
+                    "G102 板载键盘动作不支持 usage_page=0x{usage_page:04x}, usage=0x{usage:04x}"
+                ));
+            }
+            Ok(OnboardButtonAction::Keyboard {
+                modifiers: *modifiers,
+                key: *usage as u8,
+            })
+        }
+        ButtonActionConfig::OnboardConsumer { usage } => {
+            Ok(OnboardButtonAction::ConsumerControl { usage: *usage })
+        }
+        ButtonActionConfig::Disabled => Ok(OnboardButtonAction::Disabled),
+    }
+}
+
+fn mouse_button_action(button: u8) -> OnboardButtonAction {
+    OnboardButtonAction::Mouse {
+        button: Some(button),
+        mask: 1_u16 << (button - 1),
+    }
 }
 
 fn print_target(target: &EnvironmentTarget, snapshot: &AgentSnapshot) {
@@ -1052,7 +1132,7 @@ fn print_target(target: &EnvironmentTarget, snapshot: &AgentSnapshot) {
     );
 }
 
-fn apply_target(target: &EnvironmentTarget) -> Result<DpiWriteResult, ApplyFailure> {
+fn apply_target_dpi(target: &EnvironmentTarget) -> Result<DpiWriteResult, ApplyFailure> {
     match set_first_g102_dpi(target.dpi, false) {
         Ok(result) if result.changed => {
             println!(
@@ -1075,6 +1155,39 @@ fn apply_target(target: &EnvironmentTarget) -> Result<DpiWriteResult, ApplyFailu
                 retryable,
             })
         }
+    }
+}
+
+fn apply_target_full(target: &EnvironmentTarget) -> Result<DpiWriteResult, ApplyFailure> {
+    let dpi_result = apply_target_dpi(target)?;
+    let profile = apply_first_g102_profile(&target.button_actions, target.dpi, false)
+        .map_err(|error| hidpp_apply_failure("板载配置写入失败", error))?;
+    if profile.changed_buttons.is_empty() && !profile.dpi_changed {
+        println!("板载 DPI 与按键映射已和当前环境一致，跳过闪存写入。");
+    } else {
+        println!(
+            "板载配置已写入并回读通过：DPI 变更={}，按键槽位 {:?}。",
+            profile.dpi_changed, profile.changed_buttons
+        );
+    }
+    let mode = activate_first_g102_onboard_mode(false)
+        .map_err(|error| hidpp_apply_failure("板载模式启用失败", error))?;
+    if mode.before != mode.after {
+        println!("设备已切换到板载模式，按键映射现已生效。");
+    }
+    // 板载 DPI 已在同一事务中更新；启用板载模式后不能再执行运行态 DPI 写入，
+    // 否则设备会回到 Host 模式并停用板载按键映射。
+    Ok(dpi_result)
+}
+
+fn hidpp_apply_failure(context: &str, error: HidppError) -> ApplyFailure {
+    let retryable = !matches!(
+        error,
+        HidppError::PlatformUnsupported | HidppError::InvalidDpi { .. }
+    );
+    ApplyFailure {
+        message: format!("{context}：{error}"),
+        retryable,
     }
 }
 
@@ -1200,12 +1313,52 @@ mod tests {
     }
 
     #[test]
+    fn converts_profile_mappings_to_verified_g102_slots() {
+        let mut profile = ConfigDocument::default().profiles.office;
+        profile.button_mappings[2].action = ButtonActionConfig::OnboardKeyboard {
+            usage_page: 0x07,
+            usage: 0x2a,
+            modifiers: 0,
+        };
+        let actions = button_actions_for_profile(&profile).unwrap();
+
+        assert_eq!(actions[0], mouse_button_action(1));
+        assert_eq!(
+            actions[2],
+            OnboardButtonAction::Keyboard {
+                modifiers: 0,
+                key: 0x2a
+            }
+        );
+        assert_eq!(actions[3], mouse_button_action(4));
+        assert_eq!(
+            actions[5],
+            OnboardButtonAction::Special {
+                code: 0x05,
+                profile: 0
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_incomplete_profile_before_device_io() {
+        let mut profile = ConfigDocument::default().profiles.office;
+        profile
+            .button_mappings
+            .retain(|mapping| mapping.physical_control != "g102:middle");
+
+        assert!(button_actions_for_profile(&profile).is_err());
+    }
+
+    #[test]
     fn target_maps_to_sanitized_ipc_snapshot() {
         let target = EnvironmentTarget {
             executable_name: "private-process.exe".to_owned(),
             process_id: 42,
             environment: Environment::Cs2,
             dpi: 800,
+            button_actions: button_actions_for_profile(&ConfigDocument::default().profiles.cs2)
+                .unwrap(),
         };
 
         let snapshot = snapshot_for_target(&target, 7, DeviceStatus::Ready, Some(800));

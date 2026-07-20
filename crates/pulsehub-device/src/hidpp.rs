@@ -156,6 +156,7 @@ pub struct DpiWriteResult {
 pub struct OnboardWriteResult {
     pub profile_sector: u16,
     pub changed_buttons: Vec<usize>,
+    pub dpi_changed: bool,
     pub verified: bool,
 }
 
@@ -275,6 +276,14 @@ pub fn set_first_g102_dpi(
 pub fn apply_first_g102_office_buttons(
     protocol_trace: bool,
 ) -> Result<OnboardWriteResult, HidppError> {
+    apply_first_g102_button_actions(&g102_office_button_actions(), protocol_trace)
+}
+
+#[cfg(windows)]
+pub fn apply_first_g102_button_actions(
+    actions: &[OnboardButtonAction; 6],
+    protocol_trace: bool,
+) -> Result<OnboardWriteResult, HidppError> {
     let mut transport = WindowsHidppTransport::open(protocol_trace)?;
     if transport.product_id != 0xc092 || transport.release_number != 0x5200 {
         return Err(HidppError::InvalidResponse(format!(
@@ -282,7 +291,23 @@ pub fn apply_first_g102_office_buttons(
             transport.product_id, transport.release_number
         )));
     }
-    apply_office_buttons(&mut transport)
+    apply_profile_settings(&mut transport, actions, None)
+}
+
+#[cfg(windows)]
+pub fn apply_first_g102_profile(
+    actions: &[OnboardButtonAction; 6],
+    dpi: u16,
+    protocol_trace: bool,
+) -> Result<OnboardWriteResult, HidppError> {
+    let mut transport = WindowsHidppTransport::open(protocol_trace)?;
+    if transport.product_id != 0xc092 || transport.release_number != 0x5200 {
+        return Err(HidppError::InvalidResponse(format!(
+            "拒绝板载写入：仅验证过 046d:c092 release=5200，当前为 046d:{:04x} release={:04x}",
+            transport.product_id, transport.release_number
+        )));
+    }
+    apply_profile_settings(&mut transport, actions, Some(dpi))
 }
 
 #[cfg(windows)]
@@ -330,6 +355,23 @@ pub fn set_first_g102_dpi(
 
 #[cfg(not(windows))]
 pub fn apply_first_g102_office_buttons(
+    _protocol_trace: bool,
+) -> Result<OnboardWriteResult, HidppError> {
+    Err(HidppError::PlatformUnsupported)
+}
+
+#[cfg(not(windows))]
+pub fn apply_first_g102_button_actions(
+    _actions: &[OnboardButtonAction; 6],
+    _protocol_trace: bool,
+) -> Result<OnboardWriteResult, HidppError> {
+    Err(HidppError::PlatformUnsupported)
+}
+
+#[cfg(not(windows))]
+pub fn apply_first_g102_profile(
+    _actions: &[OnboardButtonAction; 6],
+    _dpi: u16,
     _protocol_trace: bool,
 ) -> Result<OnboardWriteResult, HidppError> {
     Err(HidppError::PlatformUnsupported)
@@ -452,7 +494,11 @@ fn set_onboard_mode(
     Ok(())
 }
 
-fn apply_office_buttons(transport: &mut impl Transport) -> Result<OnboardWriteResult, HidppError> {
+fn apply_profile_settings(
+    transport: &mut impl Transport,
+    actions: &[OnboardButtonAction; 6],
+    dpi: Option<u16>,
+) -> Result<OnboardWriteResult, HidppError> {
     let feature = get_feature(transport, ONBOARD_PROFILES_ID)?;
     if feature.index == 0 {
         return Err(HidppError::InvalidResponse(
@@ -486,11 +532,13 @@ fn apply_office_buttons(transport: &mut impl Transport) -> Result<OnboardWriteRe
     }
 
     let original = read_onboard_sector(transport, feature.index, profile_sector, info.sector_size)?;
-    let (desired, changed_buttons) = build_office_profile_sector(&original, info.button_count)?;
-    if changed_buttons.is_empty() {
+    let (desired, changed_buttons, dpi_changed) =
+        build_profile_sector(&original, info.button_count, actions, dpi)?;
+    if changed_buttons.is_empty() && !dpi_changed {
         return Ok(OnboardWriteResult {
             profile_sector,
             changed_buttons,
+            dpi_changed,
             verified: true,
         });
     }
@@ -543,14 +591,27 @@ fn apply_office_buttons(transport: &mut impl Transport) -> Result<OnboardWriteRe
     Ok(OnboardWriteResult {
         profile_sector,
         changed_buttons,
+        dpi_changed,
         verified: true,
     })
 }
 
+#[cfg(test)]
 fn build_office_profile_sector(
     original: &[u8],
     button_count: u8,
 ) -> Result<(Vec<u8>, Vec<usize>), HidppError> {
+    let (sector, buttons, _) =
+        build_profile_sector(original, button_count, &g102_office_button_actions(), None)?;
+    Ok((sector, buttons))
+}
+
+fn build_profile_sector(
+    original: &[u8],
+    button_count: u8,
+    actions: &[OnboardButtonAction; 6],
+    dpi: Option<u16>,
+) -> Result<(Vec<u8>, Vec<usize>, bool), HidppError> {
     validate_sector_crc(original)?;
     if button_count != 6 || original.len() != 255 {
         return Err(HidppError::InvalidResponse(
@@ -558,8 +619,23 @@ fn build_office_profile_sector(
         ));
     }
     let mut desired = original.to_vec();
+    let mut dpi_changed = false;
+    if let Some(dpi) = dpi {
+        let default_index = usize::from(desired[1]);
+        if default_index >= 5 {
+            return Err(HidppError::InvalidResponse(format!(
+                "板载默认 DPI 索引 {default_index} 超出已验证范围"
+            )));
+        }
+        let start = 3 + default_index * 2;
+        let encoded = dpi.to_le_bytes();
+        if desired[start..start + 2] != encoded {
+            desired[start..start + 2].copy_from_slice(&encoded);
+            dpi_changed = true;
+        }
+    }
     let mut changed_buttons = Vec::new();
-    for (index, action) in g102_office_button_actions().iter().enumerate() {
+    for (index, action) in actions.iter().enumerate() {
         let start = 32 + index * 4;
         let encoded = encode_onboard_button(action)?;
         if desired[start..start + 4] != encoded {
@@ -570,7 +646,7 @@ fn build_office_profile_sector(
     let payload_length = desired.len() - 2;
     let crc = crc_ccitt(&desired[..payload_length]);
     desired[payload_length..].copy_from_slice(&crc.to_be_bytes());
-    Ok((desired, changed_buttons))
+    Ok((desired, changed_buttons, dpi_changed))
 }
 
 fn write_onboard_sector(
@@ -1220,9 +1296,9 @@ mod tests {
 
     use super::{
         DpiSensorInfo, HidppError, OnboardButtonAction, OnboardMode, Transport,
-        build_office_profile_sector, crc_ccitt, encode_onboard_button, g102_office_button_actions,
-        parse_dpi_list, parse_onboard_profile, parse_onboard_profiles, request_long,
-        response_matches, set_onboard_mode, set_sensor_dpi, validate_requested_dpi,
+        build_office_profile_sector, build_profile_sector, crc_ccitt, encode_onboard_button,
+        g102_office_button_actions, parse_dpi_list, parse_onboard_profile, parse_onboard_profiles,
+        request_long, response_matches, set_onboard_mode, set_sensor_dpi, validate_requested_dpi,
         validate_response, write_onboard_sector,
     };
 
@@ -1445,6 +1521,31 @@ mod tests {
         assert_eq!(
             u16::from_be_bytes([desired[253], desired[254]]),
             crc_ccitt(&desired[..253])
+        );
+    }
+
+    #[test]
+    fn patches_default_dpi_slot_with_buttons_in_one_sector() {
+        let mut original = vec![0_u8; 255];
+        original[1] = 2;
+        original[7..9].copy_from_slice(&800_u16.to_le_bytes());
+        for (index, action) in g102_office_button_actions().iter().enumerate() {
+            let start = 32 + index * 4;
+            original[start..start + 4].copy_from_slice(&encode_onboard_button(action).unwrap());
+        }
+        let crc = crc_ccitt(&original[..253]);
+        original[253..].copy_from_slice(&crc.to_be_bytes());
+
+        let (desired, changed_buttons, dpi_changed) =
+            build_profile_sector(&original, 6, &g102_office_button_actions(), Some(3200)).unwrap();
+
+        assert!(dpi_changed);
+        assert!(changed_buttons.is_empty());
+        assert_eq!(&desired[7..9], &3200_u16.to_le_bytes());
+        assert_eq!(&desired[32..56], &original[32..56]);
+        assert_eq!(
+            crc_ccitt(&desired[..253]),
+            u16::from_be_bytes([desired[253], desired[254]])
         );
     }
 
