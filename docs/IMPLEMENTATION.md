@@ -996,6 +996,10 @@ Office 与 CS2 配置页现从 `ConfigDocument.button_mappings` 构造独立 Sli
 Ctrl+A / 禁用` 白名单中切换。映射和 DPI 作为同一草稿先经代理 `validate_draft`，再按固定
 `base_revision` 提交；GUI 仍不打开 HID 句柄，也不把保存成功描述为闪存已写入。
 
+窗口关闭已接入 Slint `Window::on_close_requested`：无草稿时允许窗口隐藏并结束事件循环；有草稿时
+保持窗口显示并打开阻断对话框，提供“保存并关闭 / 放弃更改 / 取消”。保存并关闭只有在代理完成
+校验和提交后才退出；校验失败、修订冲突或 IPC 错误会取消关闭意图、保留草稿并恢复可操作状态。
+
 GUI 使用 Slint，仅在主线程运行 Slint 事件循环。所有 IPC 均在工作线程完成，再通过 Slint 的事件循环投递接口更新 UI。
 
 首版页面：

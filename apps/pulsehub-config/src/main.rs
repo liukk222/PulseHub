@@ -48,6 +48,19 @@ fn run_gui() -> ExitCode {
         }
     };
 
+    let close_ui = ui.as_weak();
+    ui.window().on_close_requested(move || {
+        let Some(ui) = close_ui.upgrade() else {
+            return slint::CloseRequestResponse::HideWindow;
+        };
+        if should_prompt_before_close(ui.get_draft_dirty()) {
+            ui.set_close_dialog_visible(true);
+            slint::CloseRequestResponse::KeepWindowShown
+        } else {
+            slint::CloseRequestResponse::HideWindow
+        }
+    });
+
     let refresh_ui = ui.as_weak();
     ui.on_refresh_requested(move || {
         if let Some(ui) = refresh_ui.upgrade()
@@ -92,6 +105,10 @@ fn run_gui() -> ExitCode {
                         ui.set_busy(false);
                         ui.set_save_title("配置已保存".into());
                         ui.set_save_detail("配置文件已经更新；设备应用状态由代理独立管理。".into());
+                        if ui.get_close_after_save() {
+                            ui.set_close_after_save(false);
+                            let _ = ui.hide();
+                        }
                     }
                 }
                 Err(error) if is_revision_conflict(&error) => show_gui_conflict(&worker_ui),
@@ -107,6 +124,14 @@ fn run_gui() -> ExitCode {
 
     let discard_ui = ui.as_weak();
     ui.on_discard_requested(move || refresh_gui(discard_ui.clone()));
+    let close_discard_ui = ui.as_weak();
+    ui.on_discard_and_close_requested(move || {
+        if let Some(ui) = close_discard_ui.upgrade() {
+            ui.set_draft_dirty(false);
+            ui.set_close_after_save(false);
+            let _ = ui.hide();
+        }
+    });
     refresh_gui(ui.as_weak());
 
     match ui.run() {
@@ -122,6 +147,7 @@ fn run_gui() -> ExitCode {
 fn show_gui_conflict(ui: &slint::Weak<AppWindow>) {
     if let Some(window) = ui.upgrade() {
         window.set_busy(false);
+        window.set_close_after_save(false);
         window.set_save_title("配置已在其他窗口更新".into());
         window
             .set_save_detail("当前草稿基于旧版本。为避免覆盖新配置，请放弃更改并重新载入。".into());
@@ -159,6 +185,7 @@ fn refresh_gui(ui: slint::Weak<AppWindow>) {
 fn show_gui_error(ui: &slint::Weak<AppWindow>, title: &str, error: &str) {
     if let Some(window) = ui.upgrade() {
         window.set_busy(false);
+        window.set_close_after_save(false);
         window.set_connection_text("代理离线".into());
         window.set_device_status("无法读取设备状态".into());
         window.set_save_title(title.into());
@@ -449,6 +476,10 @@ fn is_revision_conflict(error: &str) -> bool {
     error.contains("PH-IPC-CONFLICT")
 }
 
+fn should_prompt_before_close(draft_dirty: bool) -> bool {
+    draft_dirty
+}
+
 #[cfg(windows)]
 fn request_snapshot() -> Result<AgentSnapshot, String> {
     use pulsehub_ipc::windows::{connect_with_retry, default_pipe_path};
@@ -690,7 +721,9 @@ fn print_help() {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_mapping_selections, is_revision_conflict, next_action};
+    use super::{
+        apply_mapping_selections, is_revision_conflict, next_action, should_prompt_before_close,
+    };
 
     #[test]
     fn recognizes_revision_conflict_without_matching_other_errors() {
@@ -729,5 +762,11 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn close_only_prompts_for_dirty_drafts() {
+        assert!(!should_prompt_before_close(false));
+        assert!(should_prompt_before_close(true));
     }
 }

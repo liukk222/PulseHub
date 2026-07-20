@@ -12,6 +12,8 @@ export component AppWindow inherits Window {
     in-out property <int> selected-page: 0;
     in-out property <bool> draft-dirty: false;
     in-out property <bool> busy: false;
+    in-out property <bool> close-dialog-visible: false;
+    in-out property <bool> close-after-save: false;
     in-out property <int> office-dpi: 3200;
     in-out property <int> cs2-dpi: 100;
     in property <[int]> dpi-options;
@@ -31,6 +33,7 @@ export component AppWindow inherits Window {
     callback discard-requested();
     callback office-mapping-cycle(int);
     callback cs2-mapping-cycle(int);
+    callback discard-and-close-requested();
 
     VerticalLayout {
         spacing: 0px;
@@ -71,6 +74,25 @@ export component AppWindow inherits Window {
                 Rectangle { horizontal-stretch: 1; background: transparent; }
                 Button { text: "放弃更改"; enabled: !root.busy; clicked => { root.discard-requested(); } }
                 Button { text: root.busy ? "正在保存" : "保存配置"; primary: true; enabled: !root.busy; clicked => { root.save-requested(root.office-dpi, root.cs2-dpi, root.base-revision); } }
+            }
+        }
+    }
+    if root.close-dialog-visible: Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        background: Theme.overlay;
+        Rectangle {
+            width: 460px; height: 230px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px;
+            VerticalLayout { padding: 24px; spacing: 16px;
+                Text { text: "保存更改后关闭？"; color: Theme.ink; font-size: 18px; font-weight: 600; }
+                Text { text: "Office 和 CS2 共用一个待提交草稿。关闭前可以保存，也可以明确放弃本次更改。"; color: Theme.body; font-size: 14px; wrap: word-wrap; }
+                Rectangle { vertical-stretch: 1; background: transparent; }
+                HorizontalLayout { spacing: 10px;
+                    Button { text: "取消"; clicked => { root.close-dialog-visible = false; } }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                    Button { text: "放弃更改"; clicked => { root.close-dialog-visible = false; root.discard-and-close-requested(); } }
+                    Button { text: "保存并关闭"; primary: true; enabled: !root.busy; clicked => { root.close-dialog-visible = false; root.close-after-save = true; root.save-requested(root.office-dpi, root.cs2-dpi, root.base-revision); } }
+                }
             }
         }
     }
