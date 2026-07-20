@@ -7,7 +7,8 @@ publish = false
 
 [dependencies]
 pulsehub-core = { path = "../pulsehub-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.150"
 
 [lints]
 workspace = true
-

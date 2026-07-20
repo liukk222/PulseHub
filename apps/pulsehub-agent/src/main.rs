@@ -12,7 +12,7 @@ use pulsehub_config_store::{
 };
 use pulsehub_core::Environment;
 use pulsehub_device::hidpp::{HidppError, set_first_g102_dpi};
-use pulsehub_ipc::PROTOCOL_VERSION;
+use pulsehub_ipc::{AgentSnapshot, DeviceStatus, Environment as IpcEnvironment, PROTOCOL_VERSION};
 use pulsehub_profile::{
     EnvironmentTracker, ProcessRule, RetryBackoff, SelectionPolicy, select_environment_with_rules,
 };
@@ -104,7 +104,8 @@ fn inspect_or_apply(config: &ConfigDocument, apply: bool) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    print_target(&target);
+    let snapshot = snapshot_for_target(&target, 0, DeviceStatus::Unknown, None);
+    print_target(&target, &snapshot);
     if !apply {
         println!("只读识别完成，未写入设备。");
         return ExitCode::SUCCESS;
@@ -115,6 +116,24 @@ fn inspect_or_apply(config: &ConfigDocument, apply: bool) -> ExitCode {
             eprintln!("{}", error.message);
             ExitCode::FAILURE
         }
+    }
+}
+
+fn snapshot_for_target(
+    target: &EnvironmentTarget,
+    config_revision: u64,
+    device_status: DeviceStatus,
+    current_dpi: Option<u16>,
+) -> AgentSnapshot {
+    AgentSnapshot {
+        device_status,
+        active_environment: match target.environment {
+            Environment::Office => IpcEnvironment::Office,
+            Environment::Cs2 => IpcEnvironment::Cs2,
+        },
+        config_revision,
+        current_dpi,
+        desired_dpi: target.dpi,
     }
 }
 
@@ -141,7 +160,8 @@ fn run_watcher(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> Exit
             );
             return None;
         }
-        print_target(&target);
+        let snapshot = snapshot_for_target(&target, 0, DeviceStatus::Unknown, None);
+        print_target(&target, &snapshot);
         match apply_target(&target) {
             Ok(()) => {
                 tracker.observe(target.environment);
@@ -186,10 +206,13 @@ fn resolve_target(config: &ConfigDocument) -> Result<EnvironmentTarget, String> 
     })
 }
 
-fn print_target(target: &EnvironmentTarget) {
+fn print_target(target: &EnvironmentTarget, snapshot: &AgentSnapshot) {
     println!(
         "前台进程：{} (PID {})；目标环境={:?}，目标 DPI={}",
-        target.executable_name, target.process_id, target.environment, target.dpi
+        target.executable_name,
+        target.process_id,
+        snapshot.active_environment,
+        snapshot.desired_dpi
     );
 }
 
@@ -312,5 +335,23 @@ mod tests {
             selected_environment(&config, Some("explorer.exe")),
             Environment::Office
         );
+    }
+
+    #[test]
+    fn target_maps_to_sanitized_ipc_snapshot() {
+        let target = EnvironmentTarget {
+            executable_name: "private-process.exe".to_owned(),
+            process_id: 42,
+            environment: Environment::Cs2,
+            dpi: 800,
+        };
+
+        let snapshot = snapshot_for_target(&target, 7, DeviceStatus::Ready, Some(800));
+
+        assert_eq!(snapshot.device_status, DeviceStatus::Ready);
+        assert_eq!(snapshot.active_environment, IpcEnvironment::Cs2);
+        assert_eq!(snapshot.config_revision, 7);
+        assert_eq!(snapshot.current_dpi, Some(800));
+        assert_eq!(snapshot.desired_dpi, 800);
     }
 }
