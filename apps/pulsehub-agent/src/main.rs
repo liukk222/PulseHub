@@ -3,12 +3,16 @@
 mod foreground;
 mod watcher;
 
+#[cfg(windows)]
+use std::cell::RefCell;
 use std::env;
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
 
 use pulsehub_config_store::{
-    ConfigDocument, ProfileName, SelectionMode, default_config_path, load_or_create_default,
+    ConfigDocument, ConfigError, ConfigRepository, ProfileName, SelectionMode, default_config_path,
+    load_or_create_default,
 };
 use pulsehub_core::Environment;
 use pulsehub_device::hidpp::{DpiWriteResult, HidppError, probe_first_g102, set_first_g102_dpi};
@@ -45,9 +49,25 @@ struct ApplyFailure {
 }
 
 #[cfg(windows)]
+struct CommandFailure {
+    code: pulsehub_ipc::ErrorCode,
+    message: String,
+    retryable: bool,
+}
+
+#[cfg(windows)]
 enum DeviceCommand {
     ApplyNow {
-        reply: std::sync::mpsc::SyncSender<Result<AgentSnapshot, ApplyFailure>>,
+        reply: std::sync::mpsc::SyncSender<Result<serde_json::Value, CommandFailure>>,
+    },
+    ValidateDraft {
+        draft: serde_json::Value,
+        reply: std::sync::mpsc::SyncSender<Result<serde_json::Value, CommandFailure>>,
+    },
+    CommitConfig {
+        base_revision: u64,
+        draft: serde_json::Value,
+        reply: std::sync::mpsc::SyncSender<Result<serde_json::Value, CommandFailure>>,
     },
 }
 
@@ -98,7 +118,7 @@ fn main() -> ExitCode {
     );
 
     if arguments.run_agent {
-        run_agent(&config, arguments.exit_after_seconds)
+        run_agent(&path, &config, arguments.exit_after_seconds)
     } else if arguments.watch_foreground {
         run_watcher(&config, arguments.exit_after_seconds)
     } else if arguments.serve_ipc {
@@ -114,7 +134,7 @@ fn main() -> ExitCode {
 }
 
 #[cfg(windows)]
-fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCode {
+fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCode {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, RwLock, mpsc};
     use std::thread;
@@ -132,13 +152,21 @@ fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
         }
     };
 
-    let initial = match live_snapshot(config) {
+    let repository = match ConfigRepository::from_document(path, config.clone()) {
+        Ok(repository) => RefCell::new(repository),
+        Err(error) => {
+            eprintln!("配置仓库初始化失败：{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut initial = match live_snapshot(config) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             eprintln!("代理初始快照构造失败：{error}");
             return ExitCode::FAILURE;
         }
     };
+    initial.config_revision = repository.borrow().revision();
     let snapshot = Arc::new(RwLock::new(initial));
     let stopping = Arc::new(AtomicBool::new(false));
     let active_clients = Arc::new(AtomicUsize::new(0));
@@ -188,25 +216,35 @@ fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
                                 .clone()
                         },
                         |request, _| {
-                            if !matches!(request, Request::ApplyNow { .. }) {
-                                return None;
-                            }
                             let (reply, receiver) = mpsc::sync_channel(1);
-                            match command_tx.try_send(DeviceCommand::ApplyNow { reply }) {
+                            let command = match request {
+                                Request::ApplyNow { .. } => DeviceCommand::ApplyNow { reply },
+                                Request::ValidateDraft { draft, .. } => {
+                                    DeviceCommand::ValidateDraft {
+                                        draft: draft.clone(),
+                                        reply,
+                                    }
+                                }
+                                Request::CommitConfig {
+                                    base_revision,
+                                    draft,
+                                    ..
+                                } => DeviceCommand::CommitConfig {
+                                    base_revision: *base_revision,
+                                    draft: draft.clone(),
+                                    reply,
+                                },
+                                _ => return None,
+                            };
+                            match command_tx.try_send(command) {
                                 Ok(()) => match receiver.recv_timeout(Duration::from_secs(5)) {
-                                    Ok(Ok(snapshot)) => Some(Response::success(
-                                        request.request_id(),
-                                        serde_json::to_value(snapshot)
-                                            .expect("AgentSnapshot 必须可序列化"),
-                                    )),
+                                    Ok(Ok(data)) => {
+                                        Some(Response::success(request.request_id(), data))
+                                    }
                                     Ok(Err(error)) => Some(Response::failure(
                                         request.request_id(),
                                         ErrorBody {
-                                            code: if error.retryable {
-                                                ErrorCode::Busy
-                                            } else {
-                                                ErrorCode::Internal
-                                            },
+                                            code: error.code,
                                             message: error.message,
                                             retryable: error.retryable,
                                         },
@@ -269,7 +307,8 @@ fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
         exit_after_seconds.map(Duration::from_secs),
         Arc::clone(&stopping),
         || {
-            let target = match resolve_target(config) {
+            let current_config = repository.borrow().document().clone();
+            let target = match resolve_target(&current_config) {
                 Ok(target) => target,
                 Err(error) => {
                     let delay = backoff.record_failure();
@@ -285,7 +324,12 @@ fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
             }
             print_target(
                 &target,
-                &snapshot_for_target(&target, 0, DeviceStatus::Unknown, None),
+                &snapshot_for_target(
+                    &target,
+                    repository.borrow().revision(),
+                    DeviceStatus::Unknown,
+                    None,
+                ),
             );
             match apply_target(&target) {
                 Ok(applied) => {
@@ -293,8 +337,12 @@ fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
                     backoff.record_success();
                     *foreground_snapshot
                         .write()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-                        snapshot_for_target(&target, 0, DeviceStatus::Ready, Some(applied.after));
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = snapshot_for_target(
+                        &target,
+                        repository.borrow().revision(),
+                        DeviceStatus::Ready,
+                        Some(applied.after),
+                    );
                     None
                 }
                 Err(error) if error.retryable => {
@@ -309,28 +357,93 @@ fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
             }
         },
         || {
-            while let Ok(DeviceCommand::ApplyNow { reply }) = command_rx.try_recv() {
-                let result = resolve_target(config).and_then(|target| {
-                    apply_target(&target)
-                        .map(|applied| {
-                            let current = snapshot_for_target(
-                                &target,
-                                0,
-                                DeviceStatus::Ready,
-                                Some(applied.after),
-                            );
+            while let Ok(command) = command_rx.try_recv() {
+                match command {
+                    DeviceCommand::ApplyNow { reply } => {
+                        let current_config = repository.borrow().document().clone();
+                        let result = resolve_target(&current_config)
+                            .map_err(|message| CommandFailure {
+                                code: ErrorCode::Internal,
+                                message,
+                                retryable: true,
+                            })
+                            .and_then(|target| {
+                                apply_target(&target)
+                                    .map_err(|error| CommandFailure {
+                                        code: if error.retryable {
+                                            ErrorCode::Busy
+                                        } else {
+                                            ErrorCode::Internal
+                                        },
+                                        message: error.message,
+                                        retryable: error.retryable,
+                                    })
+                                    .map(|applied| {
+                                        let current = snapshot_for_target(
+                                            &target,
+                                            repository.borrow().revision(),
+                                            DeviceStatus::Ready,
+                                            Some(applied.after),
+                                        );
+                                        *command_snapshot
+                                            .write()
+                                            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                                            current.clone();
+                                        serde_json::to_value(current)
+                                            .expect("AgentSnapshot 必须可序列化")
+                                    })
+                            });
+                        let _ = reply.send(result);
+                    }
+                    DeviceCommand::ValidateDraft { draft, reply } => {
+                        let result = repository
+                            .borrow()
+                            .validate_draft(draft)
+                            .map(|_| {
+                                serde_json::json!({
+                                    "valid": true,
+                                    "revision": repository.borrow().revision()
+                                })
+                            })
+                            .map_err(config_command_failure);
+                        let _ = reply.send(result);
+                    }
+                    DeviceCommand::CommitConfig {
+                        base_revision,
+                        draft,
+                        reply,
+                    } => {
+                        let committed = {
+                            repository
+                                .borrow_mut()
+                                .commit(base_revision, draft)
+                                .map_err(config_command_failure)
+                        };
+                        let result = committed.map(|revision| {
+                            let current_config = repository.borrow().document().clone();
+                            let previous = command_snapshot
+                                .read()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .clone();
+                            let desired_dpi = match previous.active_environment {
+                                IpcEnvironment::Office => current_config.profiles.office.dpi,
+                                IpcEnvironment::Cs2 => current_config.profiles.cs2.dpi,
+                            };
+                            let current = AgentSnapshot {
+                                device_status: previous.device_status,
+                                active_environment: previous.active_environment,
+                                config_revision: revision,
+                                current_dpi: previous.current_dpi,
+                                desired_dpi,
+                            };
                             *command_snapshot
                                 .write()
                                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = current.clone();
-                            current
-                        })
-                        .map_err(|error| error.message)
-                });
-                let result = result.map_err(|message| ApplyFailure {
-                    message,
-                    retryable: true,
-                });
-                let _ = reply.send(result);
+                            serde_json::to_value(current).expect("AgentSnapshot 必须可序列化")
+                        });
+                        let _ = reply.send(result);
+                    }
+                }
             }
         },
     );
@@ -350,9 +463,25 @@ fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
 }
 
 #[cfg(not(windows))]
-fn run_agent(_: &ConfigDocument, _: Option<u64>) -> ExitCode {
+fn run_agent(_: &Path, _: &ConfigDocument, _: Option<u64>) -> ExitCode {
     eprintln!("统一代理模式仅支持 Windows。");
     ExitCode::FAILURE
+}
+
+#[cfg(windows)]
+fn config_command_failure(error: ConfigError) -> CommandFailure {
+    let code = match error {
+        ConfigError::RevisionConflict { .. } => pulsehub_ipc::ErrorCode::Conflict,
+        ConfigError::Validation(_)
+        | ConfigError::UnsupportedSchema { .. }
+        | ConfigError::Parse { .. } => pulsehub_ipc::ErrorCode::InvalidRequest,
+        _ => pulsehub_ipc::ErrorCode::Internal,
+    };
+    CommandFailure {
+        code,
+        message: error.to_string(),
+        retryable: false,
+    }
 }
 
 #[cfg(windows)]

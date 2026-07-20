@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+pulsehub-config-store = { path = "../../crates/pulsehub-config-store" }
 pulsehub-core = { path = "../../crates/pulsehub-core" }
 pulsehub-ipc = { path = "../../crates/pulsehub-ipc" }
 serde_json = "1.0.150"

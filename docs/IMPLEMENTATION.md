@@ -762,7 +762,7 @@ profile format `0x04` 的槽位顺序、Keyboard HID Usage 和左 Ctrl modifier 
    同时完成替换和备份。
 5. 首次保存时目标文件不存在，使用同卷的 `MoveFileExW(temp, main, MOVEFILE_WRITE_THROUGH)`。
 6. 失败时保留并重新校验主文件与备份，清理仍存在的临时文件；不能把未知的中间状态当成保存成功。
-7. 成功后增加 `config_revision`，再触发系统集成和设备应用。
+7. 成功后增加 `config_revision` 并刷新代理快照。配置提交本身不写 HID；设备应用和系统集成由独立状态机处理。
 
 迁移函数必须逐版本执行，例如 `v1 -> v2 -> v3`，不得直接把任意旧版本解析为最新结构。遇到未知的更高版本时只读并报错，不能覆盖文件。
 
@@ -853,6 +853,8 @@ cargo run -p pulsehub-config -- --inspect-agent
 ~~~powershell
 cargo run -p pulsehub-agent -- --run-agent --confirm-device-write
 cargo run -p pulsehub-config -- --inspect-agent
+cargo run -p pulsehub-config -- --validate-current-config
+cargo run -p pulsehub-config -- --commit-current-config
 ~~~
 
 `--run-agent` 在 IPC listener 就绪后安装前台 WinEvent hook。初始事件和后续环境变化均通过同一
@@ -860,6 +862,12 @@ cargo run -p pulsehub-config -- --inspect-agent
 设置共享停止标志并自连接唤醒 IPC `accept`，最后等待 IPC 主线程退出。G102 实机已验证 Office
 前台时幂等保持 3200 DPI，IPC 同时返回 `ready / office / current=3200 / desired=3200`，退出时
 WinEvent hook 与 IPC listener 均释放。
+
+统一代理持有 `ConfigRepository`，并在前台监听线程上串行处理 `apply_now`、`validate_draft` 和
+`commit_config`。验证只执行严格反序列化与业务规则校验；提交先比较客户端读取到的
+`base_revision`，冲突返回 `conflict`，成功后原子保存并更新共享快照。提交不会自动执行 HID 写入，
+因此客户端能够明确区分“已保存”和“已应用”。`pulsehub-config` 的验证与提交参数用于现阶段端到端
+联调；提交前会先读取代理快照中的当前修订号。
 
 受控 `apply_now` 写入 POC 使用独立单连接模式，必须在代理进程侧显式确认设备写入：
 

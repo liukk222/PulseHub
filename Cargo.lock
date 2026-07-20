@@ -987,6 +987,7 @@ dependencies = [
 name = "pulsehub-config"
 version = "0.1.0"
 dependencies = [
+ "pulsehub-config-store",
  "pulsehub-core",
  "pulsehub-ipc",
  "serde_json",
