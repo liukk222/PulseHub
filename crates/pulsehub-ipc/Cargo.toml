@@ -12,6 +12,7 @@ serde_json = "1.0.150"
 
 [target.'cfg(windows)'.dependencies]
 interprocess = "2.4.2"
+pulsehub-windows-session = { path = "../pulsehub-windows-session" }
 widestring = "1.2.1"
 
 [lints]

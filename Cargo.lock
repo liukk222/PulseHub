@@ -1019,6 +1019,7 @@ version = "0.1.0"
 dependencies = [
  "interprocess",
  "pulsehub-core",
+ "pulsehub-windows-session",
  "serde",
  "serde_json",
  "widestring 1.2.1",
@@ -1036,6 +1037,13 @@ name = "pulsehub-profile"
 version = "0.1.0"
 dependencies = [
  "pulsehub-core",
+]
+
+[[package]]
+name = "pulsehub-windows-session"
+version = "0.1.0"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

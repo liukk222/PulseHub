@@ -11,11 +11,25 @@ use widestring::U16CString;
 
 use crate::{AgentSnapshot, FrameError, Session, serve_next, serve_next_with};
 
-pub const DEFAULT_PIPE_PATH: &str = r"\\.\pipe\PulseHub.Agent.v1";
-const OWNER_ONLY_DACL: &str = "D:P(A;;GA;;;OW)";
+pub const PIPE_PATH_PREFIX: &str = r"\\.\pipe\PulseHub.Agent.";
 
 type ByteListener = PipeListener<pipe_mode::Bytes, pipe_mode::Bytes>;
 pub type ByteStream = DuplexPipeStream<pipe_mode::Bytes>;
+
+pub fn default_pipe_path() -> io::Result<String> {
+    let sid = pulsehub_windows_session::current_logon_sid()?;
+    if !sid.starts_with("S-1-5-5-")
+        || !sid[2..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "当前 TokenLogonSid 格式无效",
+        ));
+    }
+    Ok(format!("{PIPE_PATH_PREFIX}{sid}"))
+}
 
 pub struct Server {
     listener: ByteListener,
@@ -23,7 +37,8 @@ pub struct Server {
 
 impl Server {
     pub fn bind(path: impl AsRef<Path>) -> io::Result<Self> {
-        let sddl = U16CString::from_str(OWNER_ONLY_DACL).map_err(io::Error::other)?;
+        let sid = pulsehub_windows_session::current_logon_sid()?;
+        let sddl = U16CString::from_str(format!("D:P(A;;GA;;;{sid})")).map_err(io::Error::other)?;
         let security_descriptor = SecurityDescriptor::deserialize(&sddl)?;
         let listener = PipeListenerOptions::new()
             .path(path.as_ref())
@@ -183,5 +198,14 @@ mod tests {
             connect_with_retry(path, Duration::from_secs(1), Duration::from_millis(10)).unwrap();
         drop(stream);
         server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn default_path_contains_current_logon_sid() {
+        let sid = pulsehub_windows_session::current_logon_sid().unwrap();
+        assert_eq!(
+            default_pipe_path().unwrap(),
+            format!("{PIPE_PATH_PREFIX}{sid}")
+        );
     }
 }

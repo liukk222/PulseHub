@@ -7,6 +7,7 @@ members = [
     "crates/pulsehub-device",
     "crates/pulsehub-ipc",
     "crates/pulsehub-profile",
+    "crates/pulsehub-windows-session",
     "tools/pulsehub-probe",
 ]
 default-members = [
@@ -26,4 +27,3 @@ repository = "https://github.com/liukk222/PulseHub"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-

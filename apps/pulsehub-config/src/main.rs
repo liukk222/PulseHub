@@ -29,10 +29,18 @@ fn main() -> ExitCode {
 
 #[cfg(windows)]
 fn inspect_agent() -> ExitCode {
-    use pulsehub_ipc::windows::{DEFAULT_PIPE_PATH, connect_with_retry};
+    use pulsehub_ipc::windows::{connect_with_retry, default_pipe_path};
+
+    let pipe_path = match default_pipe_path() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("IPC 管道名构造失败：{error}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let mut stream = match connect_with_retry(
-        DEFAULT_PIPE_PATH,
+        pipe_path,
         Duration::from_secs(5),
         Duration::from_millis(100),
     ) {

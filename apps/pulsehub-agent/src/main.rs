@@ -111,7 +111,15 @@ fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
     use std::sync::{Arc, RwLock, mpsc};
     use std::thread;
 
-    use pulsehub_ipc::windows::{DEFAULT_PIPE_PATH, Server, connect, serve_connection_with};
+    use pulsehub_ipc::windows::{Server, connect, default_pipe_path, serve_connection_with};
+
+    let pipe_path = match default_pipe_path() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("IPC 管道名构造失败：{error}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let initial = match live_snapshot(config) {
         Ok(snapshot) => snapshot,
@@ -128,8 +136,9 @@ fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
         let snapshot = Arc::clone(&snapshot);
         let stopping = Arc::clone(&stopping);
         let active_clients = Arc::clone(&active_clients);
+        let pipe_path = pipe_path.clone();
         thread::spawn(move || {
-            let server = match Server::bind(DEFAULT_PIPE_PATH) {
+            let server = match Server::bind(&pipe_path) {
                 Ok(server) => server,
                 Err(error) => {
                     let _ = ready_tx.send(Err(error.to_string()));
@@ -229,7 +238,7 @@ fn run_agent(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
         },
     );
     stopping.store(true, Ordering::Release);
-    let _ = connect(DEFAULT_PIPE_PATH);
+    let _ = connect(&pipe_path);
     let _ = ipc_thread.join();
     match result {
         Ok(()) => {
@@ -251,7 +260,15 @@ fn run_agent(_: &ConfigDocument, _: Option<u64>) -> ExitCode {
 
 #[cfg(windows)]
 fn serve_ipc_once(config: &ConfigDocument) -> ExitCode {
-    use pulsehub_ipc::windows::{DEFAULT_PIPE_PATH, Server};
+    use pulsehub_ipc::windows::{Server, default_pipe_path};
+
+    let pipe_path = match default_pipe_path() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("IPC 管道名构造失败：{error}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let snapshot = match live_snapshot(config) {
         Ok(snapshot) => snapshot,
@@ -260,14 +277,14 @@ fn serve_ipc_once(config: &ConfigDocument) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let server = match Server::bind(DEFAULT_PIPE_PATH) {
+    let server = match Server::bind(&pipe_path) {
         Ok(server) => server,
         Err(error) => {
             eprintln!("IPC 管道创建失败：{error}");
             return ExitCode::FAILURE;
         }
     };
-    println!("IPC 单连接验证服务已启动：{DEFAULT_PIPE_PATH}");
+    println!("IPC 单连接验证服务已启动：{pipe_path}");
     println!("提供包含 HID 只读状态的脱敏快照；等待 pulsehub-config 客户端……");
     let mut stream = match server.accept() {
         Ok(stream) => stream,
@@ -295,9 +312,16 @@ fn serve_ipc(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
     use std::thread;
     use std::time::Instant;
 
-    use pulsehub_ipc::windows::{DEFAULT_PIPE_PATH, Server, connect, serve_connection_with};
+    use pulsehub_ipc::windows::{Server, connect, default_pipe_path, serve_connection_with};
 
     const MAX_CLIENTS: usize = 4;
+    let pipe_path = match default_pipe_path() {
+        Ok(path) => Arc::new(path),
+        Err(error) => {
+            eprintln!("IPC 管道名构造失败：{error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let snapshot = match live_snapshot(config) {
         Ok(snapshot) => Arc::new(RwLock::new(snapshot)),
         Err(error) => {
@@ -305,7 +329,7 @@ fn serve_ipc(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
             return ExitCode::FAILURE;
         }
     };
-    let server = match Server::bind(DEFAULT_PIPE_PATH) {
+    let server = match Server::bind(pipe_path.as_str()) {
         Ok(server) => server,
         Err(error) => {
             eprintln!("IPC 管道创建失败：{error}");
@@ -313,27 +337,28 @@ fn serve_ipc(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCo
         }
     };
     let stopping = Arc::new(AtomicBool::new(false));
-    let install_stop_handler = |stopping: Arc<AtomicBool>| {
+    let install_stop_handler = |stopping: Arc<AtomicBool>, pipe_path: Arc<String>| {
         ctrlc::set_handler(move || {
             stopping.store(true, Ordering::Release);
-            let _ = connect(DEFAULT_PIPE_PATH);
+            let _ = connect(pipe_path.as_str());
         })
     };
-    if let Err(error) = install_stop_handler(Arc::clone(&stopping)) {
+    if let Err(error) = install_stop_handler(Arc::clone(&stopping), Arc::clone(&pipe_path)) {
         eprintln!("IPC Ctrl+C 处理器安装失败：{error}");
         return ExitCode::FAILURE;
     }
     if let Some(seconds) = exit_after_seconds {
         let stopping = Arc::clone(&stopping);
+        let pipe_path = Arc::clone(&pipe_path);
         thread::spawn(move || {
             thread::sleep(Duration::from_secs(seconds));
             stopping.store(true, Ordering::Release);
-            let _ = connect(DEFAULT_PIPE_PATH);
+            let _ = connect(pipe_path.as_str());
         });
     }
 
     let active_clients = Arc::new(AtomicUsize::new(0));
-    println!("IPC 常驻服务已启动：{DEFAULT_PIPE_PATH}；最多 {MAX_CLIENTS} 个并发客户端。");
+    println!("IPC 常驻服务已启动：{pipe_path}；最多 {MAX_CLIENTS} 个并发客户端。");
     println!("按 Ctrl+C 退出。服务只读取 HID 状态，不写入设备。");
     while !stopping.load(Ordering::Acquire) {
         let mut stream = match server.accept() {

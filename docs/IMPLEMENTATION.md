@@ -9,7 +9,7 @@
 
 PulseHub 是一个使用 Rust 开发的轻量鼠标配置程序。第一阶段面向 Logitech G102 LIGHTSYNC，提供真实硬件 DPI 设置、鼠标按键分配，以及“办公”和“CS2”两套配置的自动切换。
 
-当前工作区已初始化 Cargo Workspace，并包含领域模型、设备接口、配置切换、配置存储、IPC 与三个可执行入口；Windows HID 枚举、HID++ 功能发现、DPI 读写和板载配置只读解析已经通过 G102 实机验证。IPC v1 的 DTO、版本协商、长度前缀帧和 Windows Named Pipe 字节流传输已经实现，代理与配置端已完成真实跨进程只读快照验证。当前管道使用受保护的 owner-only DACL 并拒绝远程客户端，精确 logon SID 命名与代理常驻监听尚未接入。Win32 托盘、Slint GUI 以及通用按键写入仍未实现。因此，本文同时记录已验证实现与后续编码基线；未明确标为实机验证的性能数字和协议细节仍属于待验证目标。
+当前工作区已初始化 Cargo Workspace，并包含领域模型、设备接口、配置切换、配置存储、IPC 与三个可执行入口；Windows HID 枚举、HID++ 功能发现、DPI 读写和板载配置只读解析已经通过 G102 实机验证。IPC v1 的 DTO、版本协商、长度前缀帧和 Windows Named Pipe 字节流传输已经实现，代理与配置端已完成真实跨进程只读快照验证。当前管道名称及受保护 DACL 均绑定精确 TokenLogonSid，并拒绝远程客户端。Win32 托盘、Slint GUI 以及通用按键写入仍未实现。因此，本文同时记录已验证实现与后续编码基线；未明确标为实机验证的性能数字和协议细节仍属于待验证目标。
 
 本文使用以下状态词：
 
@@ -789,11 +789,11 @@ profile format `0x04` 的槽位顺序、Keyboard HID Usage 和左 Ctrl modifier 
 
 不能依赖 Named Pipe 默认 DACL，因为默认描述符可能向 Everyone/匿名主体授予读取权限。
 
-当前传输 POC 使用 `interprocess 2.4.2` 的安全封装创建字节流管道，显式设置受保护的
-owner-only DACL `D:P(A;;GA;;;OW)`、禁止句柄继承，并保持 `accept_remote = false`（映射到
-`PIPE_REJECT_REMOTE_CLIENTS`）。测试管道已经完成真实 Windows 内核往返。生产接入前仍须把
-固定 POC 名称 `PulseHub.Agent.v1` 改为包含当前 logon SID 的名称，并用跨会话测试确认隔离性；
-owner-only DACL 不能替代该命名要求。
+当前传输使用 `interprocess 2.4.2` 的安全封装创建字节流管道，并由隔离的
+`pulsehub-windows-session` crate 查询访问令牌 `TokenLogonSid`。管道名为
+`PulseHub.Agent.<S-1-5-5-X-Y>`，受保护 DACL 为 `D:P(A;;GA;;;<TokenLogonSid>)`；同时禁止句柄
+继承并保持 `accept_remote = false`（映射到 `PIPE_REJECT_REMOTE_CLIENTS`）。agent/config 已在
+真实 Windows 登录会话中完成同 SID 路径和 DACL 下的内核往返。
 
 ### 10.2 帧格式
 
@@ -825,8 +825,7 @@ DPI。
 线程，最多允许 4 个活动客户端；每次请求从共享 `RwLock<AgentSnapshot>` 克隆最新快照，而不是
 在连接建立时永久缓存。达到上限时立即关闭新连接。Ctrl+C 或验证超时通过本地自连接唤醒阻塞
 的 `accept`，停止接收后为现有连接提供 1 秒退出窗口，剩余句柄最终由进程退出回收。该模式已经
-用 3 个连续真实客户端验证快照一致性和无遗留会话退出。当前 logon SID 命名仍是生产接入前的
-剩余安全项。
+用 3 个连续真实客户端验证快照一致性和无遗留会话退出。
 
 开发期可在两个 PowerShell 终端执行以下端到端验证；代理先执行 HID++ 只读查询，服务一个客户端后退出，不写入设备：
 
