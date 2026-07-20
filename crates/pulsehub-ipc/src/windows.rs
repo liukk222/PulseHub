@@ -1,5 +1,7 @@
 use std::io;
 use std::path::Path;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use interprocess::os::windows::named_pipe::{
     DuplexPipeStream, PipeListener, PipeListenerOptions, pipe_mode,
@@ -56,6 +58,33 @@ impl Server {
 
 pub fn connect(path: impl AsRef<Path>) -> io::Result<ByteStream> {
     ByteStream::connect_by_path(path.as_ref())
+}
+
+pub fn connect_with_retry(
+    path: impl AsRef<Path>,
+    timeout: Duration,
+    retry_interval: Duration,
+) -> io::Result<ByteStream> {
+    if retry_interval.is_zero() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "IPC 重试间隔必须大于零",
+        ));
+    }
+    let deadline = Instant::now() + timeout;
+    loop {
+        match connect(path.as_ref()) {
+            Ok(stream) => return Ok(stream),
+            Err(error)
+                if matches!(error.raw_os_error(), Some(2 | 231)) && Instant::now() < deadline =>
+            {
+                thread::sleep(
+                    retry_interval.min(deadline.saturating_duration_since(Instant::now())),
+                );
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -120,6 +149,25 @@ mod tests {
         .unwrap();
         let response: Response = read_frame(&mut client).unwrap();
         assert_eq!(response.data, Some(serde_json::to_value(snapshot).unwrap()));
+        server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn client_retries_until_listener_is_created() {
+        let path = format!(
+            r"\\.\pipe\PulseHub.DelayedTest.{}.{}",
+            std::process::id(),
+            NEXT_PIPE.fetch_add(1, Ordering::Relaxed)
+        );
+        let server_path = path.clone();
+        let server_thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            let server = Server::bind(server_path).unwrap();
+            let _stream = server.accept().unwrap();
+        });
+        let stream =
+            connect_with_retry(path, Duration::from_secs(1), Duration::from_millis(10)).unwrap();
+        drop(stream);
         server_thread.join().unwrap();
     }
 }

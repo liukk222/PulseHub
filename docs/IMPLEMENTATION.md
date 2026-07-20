@@ -819,16 +819,19 @@ payload_length bytes UTF-8 JSON
 Pipe 帧传输和单连接会话已实现；代理常驻 accept 循环、并发客户端上限、当前 logon SID
 命名和关机协调是下一实现单元。
 
-开发期可在两个 PowerShell 终端执行以下只读端到端验证；代理服务一个客户端后退出，不打开 HID：
+开发期可在两个 PowerShell 终端执行以下端到端验证；代理先执行 HID++ 只读查询，服务一个客户端后退出，不写入设备：
 
 ~~~powershell
 cargo run -p pulsehub-agent -- --serve-ipc-once
 cargo run -p pulsehub-config -- --inspect-agent
 ~~~
 
-已验证输出能够从实际 `%APPDATA%\PulseHub\config.toml` 解析当前前台目标，并经 `hello` 与
-`get_snapshot` 返回脱敏快照。设备尚未查询时必须返回 `device_status = unknown` 和
-`current_dpi = null`，不得把目标 DPI 伪装成硬件当前值。
+已验证输出能够从实际 `%APPDATA%\PulseHub\config.toml` 解析当前前台目标，查询 G102 的真实
+运行态 DPI，并经 `hello` 与 `get_snapshot` 返回脱敏快照。设备断开、忙或协议查询失败时仍返回
+对应的降级状态和 `current_dpi = null`，不得把目标 DPI 伪装成硬件当前值。
+
+由于完整 HID++ 探测可能晚于 GUI 进程启动，配置端连接使用最长 5 秒、间隔 100 ms 的有界重试；
+只重试“管道尚不存在”和“所有实例忙”，访问拒绝等安全错误立即返回。
 
 首次连接先完成版本协商：
 

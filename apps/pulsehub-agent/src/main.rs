@@ -11,7 +11,7 @@ use pulsehub_config_store::{
     ConfigDocument, ProfileName, SelectionMode, default_config_path, load_or_create_default,
 };
 use pulsehub_core::Environment;
-use pulsehub_device::hidpp::{HidppError, set_first_g102_dpi};
+use pulsehub_device::hidpp::{HidppError, probe_first_g102, set_first_g102_dpi};
 use pulsehub_ipc::{AgentSnapshot, DeviceStatus, Environment as IpcEnvironment, PROTOCOL_VERSION};
 use pulsehub_profile::{
     EnvironmentTracker, ProcessRule, RetryBackoff, SelectionPolicy, select_environment_with_rules,
@@ -110,7 +110,21 @@ fn serve_ipc_once(config: &ConfigDocument) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let snapshot = snapshot_for_target(&target, 0, DeviceStatus::Unknown, None);
+    println!("正在执行 HID++ 只读状态查询……");
+    let probe = probe_first_g102(false);
+    let (device_status, current_dpi) = match &probe {
+        Ok(result) => match result.dpi_sensors.first() {
+            Some(sensor) => (DeviceStatus::Ready, Some(sensor.current)),
+            None => (DeviceStatus::Degraded, None),
+        },
+        Err(HidppError::InterfaceNotFound) => (DeviceStatus::Disconnected, None),
+        Err(HidppError::Timeout) => (DeviceStatus::Busy, None),
+        Err(_) => (DeviceStatus::Degraded, None),
+    };
+    if let Err(error) = &probe {
+        eprintln!("HID++ 状态查询未完成：{error}；仍提供降级快照。");
+    }
+    let snapshot = snapshot_for_target(&target, 0, device_status, current_dpi);
     let server = match Server::bind(DEFAULT_PIPE_PATH) {
         Ok(server) => server,
         Err(error) => {
@@ -119,7 +133,7 @@ fn serve_ipc_once(config: &ConfigDocument) -> ExitCode {
         }
     };
     println!("IPC 单连接验证服务已启动：{DEFAULT_PIPE_PATH}");
-    println!("仅提供脱敏快照，不读取或写入 HID；等待 pulsehub-config 客户端……");
+    println!("提供包含 HID 只读状态的脱敏快照；等待 pulsehub-config 客户端……");
     let mut stream = match server.accept() {
         Ok(stream) => stream,
         Err(error) => {

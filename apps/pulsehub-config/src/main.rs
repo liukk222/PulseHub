@@ -2,6 +2,8 @@
 
 use std::env;
 use std::process::ExitCode;
+#[cfg(windows)]
+use std::time::Duration;
 
 use pulsehub_ipc::{AgentSnapshot, PROTOCOL_VERSION, Request, Response, read_frame, write_frame};
 
@@ -27,9 +29,13 @@ fn main() -> ExitCode {
 
 #[cfg(windows)]
 fn inspect_agent() -> ExitCode {
-    use pulsehub_ipc::windows::{DEFAULT_PIPE_PATH, connect};
+    use pulsehub_ipc::windows::{DEFAULT_PIPE_PATH, connect_with_retry};
 
-    let mut stream = match connect(DEFAULT_PIPE_PATH) {
+    let mut stream = match connect_with_retry(
+        DEFAULT_PIPE_PATH,
+        Duration::from_secs(5),
+        Duration::from_millis(100),
+    ) {
         Ok(stream) => stream,
         Err(error) => {
             eprintln!("无法连接 PulseHub agent：{error}");
