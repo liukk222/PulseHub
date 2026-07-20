@@ -770,6 +770,13 @@ profile format `0x04` 的槽位顺序、Keyboard HID Usage 和左 Ctrl modifier 
 
 `start_with_windows` 是配置声明的期望状态。配置提交成功后由代理使用当前用户权限同步 `HKCU Run`；注册表同步失败不回滚配置文件，但必须返回独立的系统集成错误。安装器仅负责初始选择和卸载清理。
 
+阶段 3 已实现 `ConfigRepository` 作为修订化存储边界：打开配置时建立进程内 revision 1；
+`validate_draft` 将严格 JSON 草稿反序列化为 `ConfigDocument` 并复用完整 schema/业务校验，但不
+落盘；`commit(base_revision, draft)` 先比较修订，冲突时不校验、不保存，匹配时完成校验和原子
+保存，只有保存成功后才替换正式内存文档并递增 revision。测试覆盖成功提交、旧修订冲突和非法
+JSON 不改变修订。该 revision 是代理进程生命周期内的并发控制编号，不写入 schema v1 文件；
+代理重启后重新从 1 开始，旧 IPC 连接会随进程退出而失效。
+
 ## 10. IPC 协议
 
 ### 10.1 管道和权限

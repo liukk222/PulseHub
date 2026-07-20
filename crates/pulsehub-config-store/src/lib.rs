@@ -114,6 +114,7 @@ pub enum ConfigError {
     Io { path: PathBuf, source: io::Error },
     Parse { path: PathBuf, message: String },
     Serialize(String),
+    RevisionConflict { expected: u64, actual: u64 },
 }
 
 impl fmt::Display for ConfigError {
@@ -131,7 +132,79 @@ impl fmt::Display for ConfigError {
                 write!(formatter, "配置解析失败 {}：{message}", path.display())
             }
             Self::Serialize(message) => write!(formatter, "配置序列化失败：{message}"),
+            Self::RevisionConflict { expected, actual } => write!(
+                formatter,
+                "配置修订冲突：提交基于 {expected}，当前修订为 {actual}"
+            ),
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct ConfigRepository {
+    path: PathBuf,
+    document: ConfigDocument,
+    revision: u64,
+}
+
+impl ConfigRepository {
+    pub fn open(path: impl Into<PathBuf>) -> Result<Self, ConfigError> {
+        let path = path.into();
+        let document = load_or_create_default(&path)?;
+        Ok(Self {
+            path,
+            document,
+            revision: 1,
+        })
+    }
+
+    pub fn from_document(
+        path: impl Into<PathBuf>,
+        document: ConfigDocument,
+    ) -> Result<Self, ConfigError> {
+        document.validate()?;
+        Ok(Self {
+            path: path.into(),
+            document,
+            revision: 1,
+        })
+    }
+
+    pub fn document(&self) -> &ConfigDocument {
+        &self.document
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn validate_draft(&self, draft: serde_json::Value) -> Result<ConfigDocument, ConfigError> {
+        let document: ConfigDocument = serde_json::from_value(draft)
+            .map_err(|error| ConfigError::Validation(format!("JSON 草稿格式无效：{error}")))?;
+        document.validate()?;
+        Ok(document)
+    }
+
+    pub fn commit(
+        &mut self,
+        base_revision: u64,
+        draft: serde_json::Value,
+    ) -> Result<u64, ConfigError> {
+        if base_revision != self.revision {
+            return Err(ConfigError::RevisionConflict {
+                expected: base_revision,
+                actual: self.revision,
+            });
+        }
+        let document = self.validate_draft(draft)?;
+        let next_revision = self
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| ConfigError::Validation("配置修订号溢出".to_owned()))?;
+        save_atomic(&self.path, &document)?;
+        self.document = document;
+        self.revision = next_revision;
+        Ok(self.revision)
     }
 }
 
@@ -372,8 +445,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        ConfigDocument, ConfigError, SelectionMode, backup_path, load_or_create_default,
-        load_with_backup, save_atomic,
+        ConfigDocument, ConfigError, ConfigRepository, SelectionMode, backup_path,
+        load_or_create_default, load_with_backup, save_atomic,
     };
 
     #[test]
@@ -444,5 +517,47 @@ mod tests {
         assert!(path.exists());
 
         std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn repository_validates_commits_and_rejects_stale_revision() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("pulsehub-repository-{nonce}"));
+        let path = directory.join("config.toml");
+        let original = ConfigDocument::default();
+        let mut repository = ConfigRepository::from_document(&path, original.clone()).unwrap();
+        let mut updated = original;
+        updated.profiles.office.dpi = 3200;
+        let draft = serde_json::to_value(&updated).unwrap();
+
+        assert_eq!(repository.validate_draft(draft.clone()).unwrap(), updated);
+        assert_eq!(repository.commit(1, draft.clone()).unwrap(), 2);
+        assert_eq!(repository.revision(), 2);
+        assert_eq!(load_with_backup(&path).unwrap(), updated);
+        assert!(matches!(
+            repository.commit(1, draft),
+            Err(ConfigError::RevisionConflict {
+                expected: 1,
+                actual: 2
+            })
+        ));
+
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn repository_rejects_invalid_json_without_changing_revision() {
+        let document = ConfigDocument::default();
+        let mut repository = ConfigRepository::from_document("unused.toml", document).unwrap();
+        let invalid = serde_json::json!({"schema_version": 1, "unknown": true});
+
+        assert!(matches!(
+            repository.commit(1, invalid),
+            Err(ConfigError::Validation(_))
+        ));
+        assert_eq!(repository.revision(), 1);
     }
 }

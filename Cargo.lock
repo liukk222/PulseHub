@@ -998,6 +998,7 @@ version = "0.1.0"
 dependencies = [
  "pulsehub-core",
  "serde",
+ "serde_json",
  "tempfile",
  "toml",
 ]
