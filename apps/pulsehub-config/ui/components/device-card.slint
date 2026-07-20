@@ -4,7 +4,6 @@ export component DeviceCard inherits Rectangle {
     in property <string> status-text;
     in property <string> environment-text;
     in property <string> current-dpi;
-    in property <string> desired-dpi;
     background: Theme.surface;
     border-color: Theme.hairline;
     border-width: 1px;
@@ -20,7 +19,6 @@ export component DeviceCard inherits Rectangle {
             spacing: 32px;
             VerticalLayout { Text { text: "当前环境"; color: Theme.muted; font-size: 12px; } Text { text: root.environment-text; color: Theme.ink; font-size: 20px; font-weight: 600; } }
             VerticalLayout { Text { text: "当前 DPI"; color: Theme.muted; font-size: 12px; } Text { text: root.current-dpi; color: Theme.ink; font-size: 20px; font-weight: 600; } }
-            VerticalLayout { Text { text: "目标 DPI"; color: Theme.muted; font-size: 12px; } Text { text: root.desired-dpi; color: Theme.ink; font-size: 20px; font-weight: 600; } }
         }
     }
 }

@@ -30,7 +30,7 @@ export component ProfilePage inherits Rectangle {
         spacing: 20px;
         Text { text: root.profile-name + " 配置"; color: Theme.ink; font-size: 26px; font-weight: 600; }
         Text { text: root.profile-name == "CS2" ? "进入 " + root.process-rule + " 时自动使用此配置。" : "适合桌面、浏览器和办公软件。"; color: Theme.muted; font-size: 14px; }
-        Rectangle {
+        if !root.dpi-cycle-enabled: Rectangle {
             background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: 150px;
             VerticalLayout {
                 padding: 20px; spacing: 12px;

@@ -7,7 +7,6 @@ export component OverviewPage inherits Rectangle {
     in property <string> device-status;
     in property <string> environment-name;
     in property <string> current-dpi;
-    in property <string> desired-dpi;
     in property <string> apply-title;
     in property <string> apply-detail;
     in property <bool> apply-enabled: true;
@@ -17,7 +16,7 @@ export component OverviewPage inherits Rectangle {
         spacing: 20px;
         Text { text: "设备概览"; color: Theme.ink; font-size: 26px; font-weight: 600; }
         Text { text: "查看设备连接、当前环境以及配置应用状态。"; color: Theme.muted; font-size: 14px; }
-        DeviceCard { status-text: root.device-status; environment-text: root.environment-name; current-dpi: root.current-dpi; desired-dpi: root.desired-dpi; }
+        DeviceCard { status-text: root.device-status; environment-text: root.environment-name; current-dpi: root.current-dpi; }
         StatusBanner { title: root.apply-title; detail: root.apply-detail; }
         HorizontalLayout {
             Rectangle { horizontal-stretch: 1; background: transparent; }
