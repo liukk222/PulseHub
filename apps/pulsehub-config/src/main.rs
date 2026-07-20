@@ -136,10 +136,23 @@ fn run_gui() -> ExitCode {
         },
     );
 
-    let office_ui = ui.as_weak();
-    ui.on_office_mapping_cycle(move |index| cycle_mapping(&office_ui, true, index));
-    let cs2_ui = ui.as_weak();
-    ui.on_cs2_mapping_cycle(move |index| cycle_mapping(&cs2_ui, false, index));
+    let restore_ui = ui.as_weak();
+    ui.on_mapping_restore_requested(move |office, index| {
+        restore_mapping(&restore_ui, office, index)
+    });
+    let key_ui = ui.as_weak();
+    ui.on_mapping_key_requested(move |office, index, key, control, shift, alt, meta| {
+        capture_mapping(
+            &key_ui,
+            office,
+            index,
+            key.as_str(),
+            control,
+            shift,
+            alt,
+            meta,
+        )
+    });
 
     let discard_ui = ui.as_weak();
     ui.on_discard_requested(move || refresh_gui(discard_ui.clone()));
@@ -409,51 +422,43 @@ fn mapping_item(mapping: &pulsehub_config_store::ButtonMappingConfig) -> Mapping
 }
 
 #[cfg(windows)]
-fn action_identity(
-    action: &pulsehub_config_store::ButtonActionConfig,
-) -> (&'static str, &'static str, bool) {
+fn action_identity(action: &pulsehub_config_store::ButtonActionConfig) -> (String, String, bool) {
     use pulsehub_config_store::ButtonActionConfig;
     match action {
         ButtonActionConfig::LogicalControl { value } if value == "mouse:left" => {
-            ("left", "左键点击", true)
+            ("left".into(), "左键点击".into(), true)
         }
         ButtonActionConfig::LogicalControl { value } if value == "mouse:right" => {
-            ("right", "右键点击", true)
+            ("right".into(), "右键点击".into(), true)
         }
         ButtonActionConfig::LogicalControl { value } if value == "mouse:middle" => {
-            ("middle", "鼠标中键", true)
+            ("middle".into(), "鼠标中键".into(), true)
         }
         ButtonActionConfig::LogicalControl { value } if value == "mouse:back" => {
-            ("side_back", "鼠标侧键（后）", true)
+            ("side_back".into(), "鼠标侧键（后）".into(), true)
         }
         ButtonActionConfig::LogicalControl { value } if value == "mouse:forward" => {
-            ("side_forward", "鼠标侧键（前）", true)
+            ("side_forward".into(), "鼠标侧键（前）".into(), true)
         }
         ButtonActionConfig::LogicalControl { value } if value == "mouse:dpi_cycle" => {
-            ("dpi_cycle", "原本 DPI 切换", true)
+            ("dpi_cycle".into(), "原本 DPI 切换".into(), true)
         }
         ButtonActionConfig::OnboardKeyboard {
             usage_page: 7,
             usage: 0x2a,
             modifiers: 0,
-        } => ("backspace", "Backspace", true),
+        } => ("key:42:0".into(), "Backspace".into(), true),
         ButtonActionConfig::OnboardKeyboard {
             usage_page: 7,
-            usage: 0x19,
-            modifiers: 1,
-        } => ("paste", "Ctrl + V", true),
-        ButtonActionConfig::OnboardKeyboard {
-            usage_page: 7,
-            usage: 0x06,
-            modifiers: 1,
-        } => ("copy", "Ctrl + C", true),
-        ButtonActionConfig::OnboardKeyboard {
-            usage_page: 7,
-            usage: 0x04,
-            modifiers: 1,
-        } => ("select_all", "Ctrl + A", true),
-        ButtonActionConfig::Disabled => ("disabled", "禁用", true),
-        _ => ("custom", "已配置动作", false),
+            usage,
+            modifiers,
+        } if *usage <= u16::from(u8::MAX) => (
+            format!("key:{usage}:{modifiers}"),
+            keyboard_action_label(*usage as u8, *modifiers),
+            true,
+        ),
+        ButtonActionConfig::Disabled => ("disabled".into(), "禁用".into(), true),
+        _ => ("custom".into(), "已配置动作".into(), false),
     }
 }
 
@@ -471,7 +476,7 @@ fn control_label(control: &str) -> &'static str {
 }
 
 #[cfg(windows)]
-fn cycle_mapping(ui: &slint::Weak<AppWindow>, office: bool, index: i32) {
+fn restore_mapping(ui: &slint::Weak<AppWindow>, office: bool, index: i32) {
     let Some(ui) = ui.upgrade() else { return };
     let model = if office {
         ui.get_office_mappings()
@@ -481,29 +486,75 @@ fn cycle_mapping(ui: &slint::Weak<AppWindow>, office: bool, index: i32) {
     let Ok(index) = usize::try_from(index) else {
         return;
     };
+    let Some(row) = model.row_data(index) else {
+        return;
+    };
+    let (id, label) = original_action(row.control_id.as_str());
+    update_mapping_row(&ui, &model, index, id, label);
+}
+
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+fn capture_mapping(
+    ui: &slint::Weak<AppWindow>,
+    office: bool,
+    index: i32,
+    key: &str,
+    control: bool,
+    shift: bool,
+    alt: bool,
+    meta: bool,
+) {
+    let Some(ui) = ui.upgrade() else { return };
+    let model = if office {
+        ui.get_office_mappings()
+    } else {
+        ui.get_cs2_mappings()
+    };
+    let Ok(index) = usize::try_from(index) else {
+        return;
+    };
+    let Some(row) = model.row_data(index) else {
+        return;
+    };
+    if row.locked {
+        return;
+    }
+    match captured_keyboard_action(key, control, shift, alt, meta) {
+        Ok((usage, modifiers, label)) => {
+            update_mapping_row(
+                &ui,
+                &model,
+                index,
+                &format!("key:{usage}:{modifiers}"),
+                &label,
+            );
+        }
+        Err(error) => {
+            ui.set_save_title("不支持该按键组合".into());
+            ui.set_save_detail(error.into());
+        }
+    }
+}
+
+#[cfg(windows)]
+fn update_mapping_row(
+    ui: &AppWindow,
+    model: &ModelRc<MappingItem>,
+    index: usize,
+    id: &str,
+    label: &str,
+) {
     let Some(mut row) = model.row_data(index) else {
         return;
     };
     if row.locked {
         return;
     }
-    let (id, label) = next_action(row.control_id.as_str(), row.action_id.as_str());
     row.action_id = id.into();
     row.action_label = label.into();
     model.set_row_data(index, row);
     ui.set_draft_dirty(true);
-}
-
-fn next_action(control: &str, current: &str) -> (&'static str, &'static str) {
-    match current {
-        "disabled" => original_action(control),
-        "middle" | "side_back" | "side_forward" | "dpi_cycle" => ("backspace", "Backspace"),
-        "backspace" => ("paste", "Ctrl + V"),
-        "paste" => ("copy", "Ctrl + C"),
-        "copy" => ("select_all", "Ctrl + A"),
-        "select_all" => ("disabled", "禁用"),
-        _ => original_action(control),
-    }
 }
 
 fn original_action(control: &str) -> (&'static str, &'static str) {
@@ -564,12 +615,131 @@ fn action_from_id(id: &str) -> Result<pulsehub_config_store::ButtonActionConfig,
         "dpi_cycle" => Ok(ButtonActionConfig::LogicalControl {
             value: "mouse:dpi_cycle".to_owned(),
         }),
-        "backspace" => Ok(keyboard(0x2a, 0)),
-        "paste" => Ok(keyboard(0x19, 1)),
-        "copy" => Ok(keyboard(0x06, 1)),
-        "select_all" => Ok(keyboard(0x04, 1)),
         "disabled" => Ok(ButtonActionConfig::Disabled),
+        _ if id.starts_with("key:") => {
+            let mut parts = id.split(':');
+            let _ = parts.next();
+            let usage = parts.next().and_then(|value| value.parse::<u16>().ok());
+            let modifiers = parts.next().and_then(|value| value.parse::<u8>().ok());
+            match (usage, modifiers, parts.next()) {
+                (Some(usage @ 1..=0xe7), Some(modifiers), None) => Ok(keyboard(usage, modifiers)),
+                _ => Err(format!("无效的键盘动作：{id}")),
+            }
+        }
         _ => Err(format!("不支持的按键动作：{id}")),
+    }
+}
+
+fn captured_keyboard_action(
+    key: &str,
+    control: bool,
+    shift: bool,
+    alt: bool,
+    meta: bool,
+) -> Result<(u8, u8, String), String> {
+    let usage = keyboard_usage_from_key(key)
+        .ok_or_else(|| format!("当前 G102 板载格式不支持按键“{key}”。请换用常规键盘按键。"))?;
+    let modifiers =
+        u8::from(control) | (u8::from(shift) << 1) | (u8::from(alt) << 2) | (u8::from(meta) << 3);
+    Ok((usage, modifiers, keyboard_action_label(usage, modifiers)))
+}
+
+fn keyboard_usage_from_key(key: &str) -> Option<u8> {
+    let normalized = key.to_lowercase();
+    let mut chars = normalized.chars();
+    let character = chars.next()?;
+    if chars.next().is_none() {
+        return match character {
+            'a'..='z' => Some(0x04 + (character as u8 - b'a')),
+            '1'..='9' => Some(0x1e + (character as u8 - b'1')),
+            '0' => Some(0x27),
+            ' ' => Some(0x2c),
+            '-' => Some(0x2d),
+            '=' => Some(0x2e),
+            '[' => Some(0x2f),
+            ']' => Some(0x30),
+            '\\' => Some(0x31),
+            ';' => Some(0x33),
+            '\'' => Some(0x34),
+            '`' => Some(0x35),
+            ',' => Some(0x36),
+            '.' => Some(0x37),
+            '/' => Some(0x38),
+            '\u{f700}' => Some(0x52),
+            '\u{f701}' => Some(0x51),
+            '\u{f702}' => Some(0x50),
+            '\u{f703}' => Some(0x4f),
+            '\u{f704}'..='\u{f70f}' => Some(0x3a + (character as u8 - 0x04)),
+            '\u{f727}' => Some(0x49),
+            '\u{f729}' => Some(0x4a),
+            '\u{f72b}' => Some(0x4d),
+            '\u{f72c}' => Some(0x4b),
+            '\u{f72d}' => Some(0x4e),
+            _ => None,
+        };
+    }
+    match key {
+        "Backspace" => Some(0x2a),
+        "Tab" => Some(0x2b),
+        "Space" => Some(0x2c),
+        "Delete" => Some(0x4c),
+        "Left" => Some(0x50),
+        "Right" => Some(0x4f),
+        "Up" => Some(0x52),
+        "Down" => Some(0x51),
+        _ => None,
+    }
+}
+
+fn keyboard_action_label(usage: u8, modifiers: u8) -> String {
+    let mut parts = Vec::new();
+    if modifiers & 0x01 != 0 {
+        parts.push("Ctrl".to_owned());
+    }
+    if modifiers & 0x02 != 0 {
+        parts.push("Shift".to_owned());
+    }
+    if modifiers & 0x04 != 0 {
+        parts.push("Alt".to_owned());
+    }
+    if modifiers & 0x08 != 0 {
+        parts.push("Win".to_owned());
+    }
+    parts.push(keyboard_usage_label(usage));
+    parts.join(" + ")
+}
+
+fn keyboard_usage_label(usage: u8) -> String {
+    match usage {
+        0x04..=0x1d => char::from(b'A' + usage - 0x04).to_string(),
+        0x1e..=0x26 => char::from(b'1' + usage - 0x1e).to_string(),
+        0x27 => "0".to_owned(),
+        0x2a => "Backspace".to_owned(),
+        0x2b => "Tab".to_owned(),
+        0x2c => "Space".to_owned(),
+        0x2d => "-".to_owned(),
+        0x2e => "=".to_owned(),
+        0x2f => "[".to_owned(),
+        0x30 => "]".to_owned(),
+        0x31 => "\\".to_owned(),
+        0x33 => ";".to_owned(),
+        0x34 => "'".to_owned(),
+        0x35 => "`".to_owned(),
+        0x36 => ",".to_owned(),
+        0x37 => ".".to_owned(),
+        0x38 => "/".to_owned(),
+        0x3a..=0x45 => format!("F{}", usage - 0x39),
+        0x49 => "Insert".to_owned(),
+        0x4a => "Home".to_owned(),
+        0x4b => "PageUp".to_owned(),
+        0x4c => "Delete".to_owned(),
+        0x4d => "End".to_owned(),
+        0x4e => "PageDown".to_owned(),
+        0x4f => "Right".to_owned(),
+        0x50 => "Left".to_owned(),
+        0x51 => "Down".to_owned(),
+        0x52 => "Up".to_owned(),
+        _ => format!("HID 0x{usage:02X}"),
     }
 }
 
@@ -894,8 +1064,9 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_mapping_selections, is_revision_conflict, next_action, selection_mode_from_label,
-        selection_mode_label, should_prompt_before_close,
+        apply_mapping_selections, captured_keyboard_action, is_revision_conflict,
+        keyboard_usage_from_key, selection_mode_from_label, selection_mode_label,
+        should_prompt_before_close,
     };
 
     #[test]
@@ -905,20 +1076,16 @@ mod tests {
     }
 
     #[test]
-    fn mapping_editor_cycles_only_through_supported_actions() {
-        assert_eq!(next_action("g102:side_back", "paste"), ("copy", "Ctrl + C"));
+    fn captures_single_keys_and_modifier_chords() {
         assert_eq!(
-            next_action("g102:side_back", "select_all"),
-            ("disabled", "禁用")
+            captured_keyboard_action("a", true, false, false, false),
+            Ok((0x04, 0x01, "Ctrl + A".to_owned()))
         );
         assert_eq!(
-            next_action("g102:side_back", "disabled"),
-            ("side_back", "鼠标侧键（后）")
+            captured_keyboard_action("Backspace", false, false, false, false),
+            Ok((0x2a, 0, "Backspace".to_owned()))
         );
-        assert_eq!(
-            next_action("g102:side_forward", "disabled"),
-            ("side_forward", "鼠标侧键（前）")
-        );
+        assert_eq!(keyboard_usage_from_key("中"), None);
     }
 
     #[test]
@@ -926,7 +1093,7 @@ mod tests {
         let mut config = pulsehub_config_store::ConfigDocument::default();
         apply_mapping_selections(
             &mut config.profiles.office.button_mappings,
-            &[("g102:side_back".to_owned(), "copy".to_owned())],
+            &[("g102:side_back".to_owned(), "key:6:1".to_owned())],
         )
         .unwrap();
         config.validate().unwrap();

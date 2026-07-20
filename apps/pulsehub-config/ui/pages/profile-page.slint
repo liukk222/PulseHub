@@ -10,7 +10,7 @@ export component ProfilePage inherits Rectangle {
     in property <bool> editing-enabled: true;
     in property <[MappingItem]> mappings;
     callback dpi-changed(int);
-    callback mapping-cycle-requested(int);
+    callback mapping-edit-requested(int);
     background: transparent;
     ScrollView {
       viewport-width: self.width;
@@ -53,7 +53,7 @@ export component ProfilePage inherits Rectangle {
                         Text { text: mapping.action-label; color: mapping.locked ? Theme.muted : Theme.primary; font-size: 14px; vertical-alignment: center; }
                         Text { text: mapping.locked ? "已保护" : "点击更改"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
                     }
-                    TouchArea { enabled: root.editing-enabled && !mapping.locked; clicked => { root.mapping-cycle-requested(index); } }
+                    TouchArea { enabled: root.editing-enabled && !mapping.locked; clicked => { root.mapping-edit-requested(index); } }
                 }
             }
         }
