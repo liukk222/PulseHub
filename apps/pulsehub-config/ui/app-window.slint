@@ -5,6 +5,19 @@ import { ProfilePage } from "pages/profile-page.slint";
 import { SettingsPage } from "pages/settings-page.slint";
 import { MappingItem } from "models.slint";
 
+export component AppTray inherits SystemTrayIcon {
+    icon: @image-url("assets/tray-icon.svg");
+    tooltip: "PulseHub";
+    callback open-requested();
+    callback quit-requested();
+    clicked => { root.open-requested(); }
+    Menu {
+        MenuItem { title: "打开 PulseHub"; activated => { root.open-requested(); } }
+        MenuSeparator { }
+        MenuItem { title: "退出托盘"; activated => { root.quit-requested(); } }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "PulseHub";
     preferred-width: 960px; preferred-height: 680px; min-width: 800px; min-height: 600px;

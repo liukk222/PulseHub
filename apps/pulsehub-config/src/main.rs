@@ -11,7 +11,7 @@ use std::sync::{
 use std::time::Duration;
 
 use pulsehub_ipc::{AgentSnapshot, PROTOCOL_VERSION, Request, Response, read_frame, write_frame};
-use pulsehub_ui::{AppWindow, MappingItem};
+use pulsehub_ui::{AppTray, AppWindow, MappingItem};
 use slint::ComponentHandle;
 #[cfg(windows)]
 use slint::{Model, ModelRc, Timer, TimerMode, VecModel};
@@ -65,6 +65,42 @@ fn run_gui() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let tray = match AppTray::new() {
+        Ok(tray) => tray,
+        Err(error) => {
+            eprintln!("PulseHub 托盘创建失败：{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let tray_open_ui = ui.as_weak();
+    tray.on_open_requested(move || {
+        if let Some(ui) = tray_open_ui.upgrade() {
+            let _ = ui.show();
+            if !ui.get_draft_dirty() {
+                refresh_gui(tray_open_ui.clone());
+            }
+        }
+    });
+    let tray_quit_ui = ui.as_weak();
+    let tray_quit_tray = tray.as_weak();
+    tray.on_quit_requested(move || {
+        if let Some(ui) = tray_quit_ui.upgrade()
+            && ui.get_draft_dirty()
+        {
+            let _ = ui.show();
+            ui.set_close_dialog_visible(true);
+            return;
+        }
+        if let Some(tray) = tray_quit_tray.upgrade() {
+            let _ = tray.hide();
+        }
+        let _ = slint::quit_event_loop();
+    });
+    if let Err(error) = tray.show() {
+        eprintln!("PulseHub 托盘显示失败：{error}");
+        return ExitCode::FAILURE;
+    }
 
     let close_ui = ui.as_weak();
     ui.window().on_close_requested(move || {
