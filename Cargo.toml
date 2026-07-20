@@ -7,6 +7,7 @@ members = [
     "crates/pulsehub-device",
     "crates/pulsehub-ipc",
     "crates/pulsehub-profile",
+    "crates/pulsehub-ui",
     "crates/pulsehub-windows-session",
     "tools/pulsehub-probe",
 ]

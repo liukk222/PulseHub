@@ -1,0 +1,26 @@
+import { Theme } from "../theme.slint";
+
+export component DeviceCard inherits Rectangle {
+    in property <string> status-text;
+    in property <string> environment-text;
+    in property <string> current-dpi;
+    in property <string> desired-dpi;
+    background: Theme.surface;
+    border-color: Theme.hairline;
+    border-width: 1px;
+    border-radius: 12px;
+    min-height: 176px;
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 14px;
+        Text { text: "Logitech G102 LIGHTSYNC"; color: Theme.ink; font-size: 18px; font-weight: 600; }
+        Text { text: root.status-text; color: Theme.success; font-size: 14px; }
+        HorizontalLayout {
+            spacing: 32px;
+            VerticalLayout { Text { text: "当前环境"; color: Theme.muted; font-size: 12px; } Text { text: root.environment-text; color: Theme.ink; font-size: 20px; font-weight: 600; } }
+            VerticalLayout { Text { text: "当前 DPI"; color: Theme.muted; font-size: 12px; } Text { text: root.current-dpi; color: Theme.ink; font-size: 20px; font-weight: 600; } }
+            VerticalLayout { Text { text: "目标 DPI"; color: Theme.muted; font-size: 12px; } Text { text: root.desired-dpi; color: Theme.ink; font-size: 20px; font-weight: 600; } }
+        }
+    }
+}

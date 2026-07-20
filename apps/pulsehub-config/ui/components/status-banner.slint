@@ -1,0 +1,24 @@
+import { Theme } from "../theme.slint";
+
+export component StatusBanner inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    in property <color> accent: Theme.warning;
+    in property <color> fill: Theme.warning-soft;
+    background: fill;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: accent;
+    min-height: 68px;
+
+    HorizontalLayout {
+        padding: 14px;
+        spacing: 12px;
+        Rectangle { width: 4px; border-radius: 2px; background: root.accent; }
+        VerticalLayout {
+            spacing: 3px;
+            Text { text: root.title; color: Theme.ink; font-size: 14px; font-weight: 600; }
+            Text { text: root.detail; color: Theme.body; font-size: 12px; wrap: word-wrap; }
+        }
+    }
+}

@@ -1,0 +1,70 @@
+import { Button } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { OverviewPage } from "pages/overview-page.slint";
+import { ProfilePage } from "pages/profile-page.slint";
+import { SettingsPage } from "pages/settings-page.slint";
+
+export component AppWindow inherits Window {
+    title: "PulseHub";
+    preferred-width: 960px; preferred-height: 680px; min-width: 800px; min-height: 600px;
+    background: Theme.canvas;
+    in-out property <int> selected-page: 0;
+    in-out property <bool> draft-dirty: false;
+    in-out property <bool> busy: false;
+    in-out property <int> office-dpi: 3200;
+    in-out property <int> cs2-dpi: 100;
+    in property <string> connection-text: "正在连接代理";
+    in property <string> device-status: "正在连接设备";
+    in property <string> environment-name: "—";
+    in property <string> current-dpi: "—";
+    in property <string> desired-dpi: "—";
+    in property <string> revision: "—";
+    in property <string> save-title: "正在读取配置";
+    in property <string> save-detail: "连接代理后将显示保存和应用状态。";
+    callback refresh-requested();
+    callback save-requested(int, int);
+    callback discard-requested();
+
+    VerticalLayout {
+        spacing: 0px;
+        Rectangle {
+            height: 58px; background: Theme.surface; border-color: Theme.hairline; border-width: 1px;
+            HorizontalLayout { padding-left: 24px; padding-right: 24px; spacing: 16px;
+                Text { text: "PulseHub"; color: Theme.ink; font-size: 20px; font-weight: 600; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Text { text: root.connection-text; color: Theme.body; font-size: 12px; vertical-alignment: center; }
+                Button { text: "刷新"; enabled: !root.busy; clicked => { root.refresh-requested(); } }
+            }
+        }
+        HorizontalLayout {
+            spacing: 0px;
+            Rectangle {
+                width: 184px; background: Theme.surface-soft;
+                VerticalLayout { padding: 16px; spacing: 8px;
+                    for item[index] in ["设备概览", "Office 配置", "CS2 配置", "设置"]: Rectangle {
+                        height: 44px; border-radius: 8px; background: root.selected-page == index ? Theme.primary-soft : transparent;
+                        Text { text: item; color: root.selected-page == index ? Theme.primary : Theme.body; font-size: 14px; vertical-alignment: center; x: 12px; }
+                        TouchArea { clicked => { root.selected-page = index; } }
+                    }
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+                }
+            }
+            Rectangle {
+                horizontal-stretch: 1; background: Theme.canvas;
+                if root.selected-page == 0: OverviewPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; device-status: root.device-status; environment-name: root.environment-name; current-dpi: root.current-dpi; desired-dpi: root.desired-dpi; apply-title: root.save-title; apply-detail: root.save-detail; }
+                if root.selected-page == 1: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "Office"; dpi: root.office-dpi; process-rule: ""; editing-enabled: !root.busy; dpi-changed(value) => { root.office-dpi = value; root.draft-dirty = true; } }
+                if root.selected-page == 2: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "CS2"; dpi: root.cs2-dpi; process-rule: "cs2.exe"; editing-enabled: !root.busy; dpi-changed(value) => { root.cs2-dpi = value; root.draft-dirty = true; } }
+                if root.selected-page == 3: SettingsPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; revision: root.revision; }
+            }
+        }
+        if root.draft-dirty: Rectangle {
+            height: 72px; background: Theme.surface; border-color: Theme.hairline; border-width: 1px;
+            HorizontalLayout { padding-left: 24px; padding-right: 24px; spacing: 12px;
+                VerticalLayout { Text { text: "有未保存的更改"; color: Theme.ink; font-size: 14px; font-weight: 600; } Text { text: "保存后才会发送给代理；应用状态将单独更新。"; color: Theme.muted; font-size: 12px; } }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                Button { text: "放弃更改"; enabled: !root.busy; clicked => { root.discard-requested(); } }
+                Button { text: root.busy ? "正在保存" : "保存配置"; primary: true; enabled: !root.busy; clicked => { root.save-requested(root.office-dpi, root.cs2-dpi); } }
+            }
+        }
+    }
+}

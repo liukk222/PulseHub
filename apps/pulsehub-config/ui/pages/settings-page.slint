@@ -1,0 +1,18 @@
+import { Theme } from "../theme.slint";
+export component SettingsPage inherits Rectangle {
+    in property <string> revision;
+    background: transparent;
+    VerticalLayout {
+        spacing: 20px;
+        Text { text: "设置"; color: Theme.ink; font-size: 26px; font-weight: 600; }
+        Text { text: "代理行为、环境选择与诊断信息。"; color: Theme.muted; font-size: 14px; }
+        Rectangle { background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: 180px;
+            VerticalLayout { padding: 20px; spacing: 14px;
+                Text { text: "登录 Windows 时启动代理"; color: Theme.ink; font-size: 14px; font-weight: 600; }
+                Text { text: "环境选择：自动（根据前台进程）"; color: Theme.body; font-size: 14px; }
+                Text { text: "IPC 协议：1    配置修订：" + root.revision; color: Theme.muted; font-size: 12px; }
+            }
+        }
+        Rectangle { vertical-stretch: 1; background: transparent; }
+    }
+}

@@ -1,0 +1,45 @@
+import { Theme } from "../theme.slint";
+
+export component ProfilePage inherits Rectangle {
+    in property <string> profile-name;
+    in property <int> dpi;
+    in property <string> process-rule;
+    in property <bool> editing-enabled: true;
+    callback dpi-changed(int);
+    background: transparent;
+    VerticalLayout {
+        spacing: 20px;
+        Text { text: root.profile-name + " 配置"; color: Theme.ink; font-size: 26px; font-weight: 600; }
+        Text { text: root.profile-name == "CS2" ? "进入 " + root.process-rule + " 时自动使用此配置。" : "适合桌面、浏览器和办公软件。"; color: Theme.muted; font-size: 14px; }
+        Rectangle {
+            background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: 150px;
+            VerticalLayout {
+                padding: 20px; spacing: 12px;
+                Text { text: "指针速度（DPI）"; color: Theme.ink; font-size: 14px; font-weight: 600; }
+                Text { text: "选项来自已识别设备能力"; color: Theme.muted; font-size: 12px; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    for value in [100, 800, 1800, 3200]: Rectangle {
+                        min-width: 78px; height: 40px; border-radius: 8px; border-width: 1px;
+                        border-color: root.dpi == value ? Theme.primary : Theme.hairline;
+                        background: root.dpi == value ? Theme.primary-soft : Theme.surface;
+                        Text { text: value; color: Theme.ink; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea { enabled: root.editing-enabled; clicked => { root.dpi-changed(value); } }
+                    }
+                }
+            }
+        }
+        Rectangle {
+            background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: 180px;
+            VerticalLayout { padding: 20px; spacing: 10px;
+                Text { text: "按键映射"; color: Theme.ink; font-size: 18px; font-weight: 600; }
+                Text { text: "左键、右键受到安全保护"; color: Theme.muted; font-size: 12px; }
+                Text { text: "侧后键（G4）     Ctrl + V"; color: Theme.body; font-size: 14px; }
+                Text { text: "侧前键（G5）     Ctrl + C"; color: Theme.body; font-size: 14px; }
+                Text { text: "中键             Backspace"; color: Theme.body; font-size: 14px; }
+                Text { text: "DPI 键           Ctrl + A"; color: Theme.body; font-size: 14px; }
+            }
+        }
+        Rectangle { vertical-stretch: 1; background: transparent; }
+    }
+}
