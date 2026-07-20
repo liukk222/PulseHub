@@ -56,6 +56,60 @@ struct ApplyFailure {
     retryable: bool,
 }
 
+const ENVIRONMENT_STABLE_FOR: Duration = Duration::from_secs(1);
+const PROFILE_APPLY_COOLDOWN: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SwitchDecision {
+    AlreadyActive,
+    Wait(Duration),
+    Apply,
+}
+
+#[derive(Debug, Default)]
+struct EnvironmentSwitchGuard {
+    pending: Option<(Environment, Instant)>,
+    last_applied_at: Option<Instant>,
+}
+
+impl EnvironmentSwitchGuard {
+    fn decide(
+        &mut self,
+        target: Environment,
+        active: Option<Environment>,
+        now: Instant,
+    ) -> SwitchDecision {
+        if active == Some(target) {
+            self.pending = None;
+            return SwitchDecision::AlreadyActive;
+        }
+        if self
+            .pending
+            .is_none_or(|(environment, _)| environment != target)
+        {
+            self.pending = Some((target, now));
+            return SwitchDecision::Wait(ENVIRONMENT_STABLE_FOR);
+        }
+        let pending_since = self.pending.expect("待应用环境必须存在").1;
+        let stable_elapsed = now.saturating_duration_since(pending_since);
+        if stable_elapsed < ENVIRONMENT_STABLE_FOR {
+            return SwitchDecision::Wait(ENVIRONMENT_STABLE_FOR - stable_elapsed);
+        }
+        if let Some(last_applied_at) = self.last_applied_at {
+            let cooldown_elapsed = now.saturating_duration_since(last_applied_at);
+            if cooldown_elapsed < PROFILE_APPLY_COOLDOWN {
+                return SwitchDecision::Wait(PROFILE_APPLY_COOLDOWN - cooldown_elapsed);
+            }
+        }
+        SwitchDecision::Apply
+    }
+
+    fn record_applied(&mut self, now: Instant) {
+        self.pending = None;
+        self.last_applied_at = Some(now);
+    }
+}
+
 #[cfg(windows)]
 struct CommandFailure {
     code: pulsehub_ipc::ErrorCode,
@@ -321,6 +375,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
 
     let mut tracker = EnvironmentTracker::default();
     let mut backoff = RetryBackoff::default();
+    let mut switch_guard = EnvironmentSwitchGuard::default();
     let foreground_snapshot = Arc::clone(&snapshot);
     let command_snapshot = Arc::clone(&snapshot);
     let mut last_dpi_poll = Instant::now();
@@ -340,8 +395,22 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                     return Some(delay);
                 }
             };
-            if tracker.current() == Some(target.environment) {
-                return None;
+            let is_new_pending = switch_guard
+                .pending
+                .is_none_or(|(environment, _)| environment != target.environment);
+            match switch_guard.decide(target.environment, tracker.current(), Instant::now()) {
+                SwitchDecision::AlreadyActive => return None,
+                SwitchDecision::Wait(delay) => {
+                    if is_new_pending {
+                        println!(
+                            "检测到目标环境 {:?}，稳定 {} ms 后再应用，以避免瞬时切换写入。",
+                            target.environment,
+                            ENVIRONMENT_STABLE_FOR.as_millis()
+                        );
+                    }
+                    return Some(delay);
+                }
+                SwitchDecision::Apply => {}
             }
             print_target(
                 &target,
@@ -357,6 +426,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
             match apply_target_full(&target) {
                 Ok(applied) => {
                     tracker.observe(target.environment);
+                    switch_guard.record_applied(Instant::now());
                     backoff.record_success();
                     let previous = foreground_snapshot
                         .read()
@@ -1409,6 +1479,73 @@ mod tests {
         assert_eq!(
             suggested_dpi_values(400, 1600, Some(400), &[400, 1600]),
             [400, 800, 1600]
+        );
+    }
+
+    #[test]
+    fn switch_guard_requires_stability_and_merges_transient_targets() {
+        let started = Instant::now();
+        let mut guard = EnvironmentSwitchGuard::default();
+
+        assert_eq!(
+            guard.decide(Environment::Cs2, Some(Environment::Office), started),
+            SwitchDecision::Wait(ENVIRONMENT_STABLE_FOR)
+        );
+        assert_eq!(
+            guard.decide(
+                Environment::Office,
+                Some(Environment::Office),
+                started + Duration::from_millis(400)
+            ),
+            SwitchDecision::AlreadyActive
+        );
+        assert_eq!(
+            guard.decide(
+                Environment::Cs2,
+                Some(Environment::Office),
+                started + Duration::from_millis(500)
+            ),
+            SwitchDecision::Wait(ENVIRONMENT_STABLE_FOR)
+        );
+        assert_eq!(
+            guard.decide(
+                Environment::Cs2,
+                Some(Environment::Office),
+                started + Duration::from_millis(1500)
+            ),
+            SwitchDecision::Apply
+        );
+    }
+
+    #[test]
+    fn switch_guard_enforces_profile_apply_cooldown() {
+        let started = Instant::now();
+        let mut guard = EnvironmentSwitchGuard::default();
+        guard.record_applied(started);
+
+        assert_eq!(
+            guard.decide(
+                Environment::Cs2,
+                Some(Environment::Office),
+                started + Duration::from_secs(1)
+            ),
+            SwitchDecision::Wait(ENVIRONMENT_STABLE_FOR)
+        );
+        assert_eq!(
+            guard.decide(
+                Environment::Cs2,
+                Some(Environment::Office),
+                started + Duration::from_secs(2)
+            ),
+            SwitchDecision::Wait(Duration::from_secs(3))
+        );
+        assert_eq!(
+            guard.decide(
+                Environment::Cs2,
+                Some(Environment::Office),
+                started + PROFILE_APPLY_COOLDOWN
+            ),
+            SwitchDecision::Apply
         );
     }
 }
