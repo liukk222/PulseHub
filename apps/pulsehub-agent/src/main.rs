@@ -72,6 +72,30 @@ struct EnvironmentSwitchGuard {
     last_applied_at: Option<Instant>,
 }
 
+const DEVICE_FAILURE_THRESHOLD: u8 = 3;
+
+#[derive(Debug, Default)]
+struct DeviceHealthMonitor {
+    consecutive_failures: u8,
+    unhealthy: bool,
+}
+
+impl DeviceHealthMonitor {
+    fn record_success(&mut self) {
+        self.consecutive_failures = 0;
+        self.unhealthy = false;
+    }
+
+    fn record_failure(&mut self) -> bool {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        if !self.unhealthy && self.consecutive_failures >= DEVICE_FAILURE_THRESHOLD {
+            self.unhealthy = true;
+            return true;
+        }
+        false
+    }
+}
+
 impl EnvironmentSwitchGuard {
     fn decide(
         &mut self,
@@ -379,10 +403,19 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
     let foreground_snapshot = Arc::clone(&snapshot);
     let command_snapshot = Arc::clone(&snapshot);
     let mut last_dpi_poll = Instant::now();
+    let recovery_requested = std::rc::Rc::new(std::cell::Cell::new(false));
+    let foreground_recovery = std::rc::Rc::clone(&recovery_requested);
+    let command_recovery = std::rc::Rc::clone(&recovery_requested);
+    let mut device_health = DeviceHealthMonitor::default();
     let result = watcher::run(
         exit_after_seconds.map(Duration::from_secs),
         Arc::clone(&stopping),
         || {
+            if foreground_recovery.replace(false) {
+                tracker.invalidate();
+                switch_guard.pending = None;
+                println!("设备健康检查连续失败，当前环境状态已失效，开始重新连接并恢复配置。");
+            }
             let current_config = repository.borrow().document().clone();
             let target = match resolve_target(&current_config) {
                 Ok(target) => target,
@@ -457,6 +490,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
             }
         },
         || {
+            let mut request_recovery = false;
             while let Ok(command) = command_rx.try_recv() {
                 match command {
                     DeviceCommand::ApplyNow { reply } => {
@@ -610,14 +644,29 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
             }
             if last_dpi_poll.elapsed() >= Duration::from_millis(500) {
                 last_dpi_poll = Instant::now();
-                if let Ok(current_dpi) = read_first_g102_dpi(false) {
-                    let mut current = command_snapshot
-                        .write()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    current.current_dpi = Some(current_dpi);
-                    current.device_status = DeviceStatus::Ready;
+                match read_first_g102_dpi(false) {
+                    Ok(current_dpi) => {
+                        device_health.record_success();
+                        let mut current = command_snapshot
+                            .write()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        current.current_dpi = Some(current_dpi);
+                        current.device_status = DeviceStatus::Ready;
+                    }
+                    Err(error) if device_health.record_failure() => {
+                        eprintln!("DPI 健康检查连续 {DEVICE_FAILURE_THRESHOLD} 次失败：{error}");
+                        let mut current = command_snapshot
+                            .write()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        current.current_dpi = None;
+                        current.device_status = DeviceStatus::Degraded;
+                        command_recovery.set(true);
+                        request_recovery = true;
+                    }
+                    Err(_) => {}
                 }
             }
+            request_recovery
         },
     );
     stopping.store(true, Ordering::Release);
@@ -1106,7 +1155,7 @@ fn run_watcher(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> Exit
                 }
             }
         },
-        || {},
+        || false,
     );
     match result {
         Ok(()) => {
@@ -1547,5 +1596,32 @@ mod tests {
             ),
             SwitchDecision::Apply
         );
+    }
+
+    #[test]
+    fn device_health_ignores_transient_failures_and_signals_once() {
+        let mut health = DeviceHealthMonitor::default();
+
+        assert!(!health.record_failure());
+        assert!(!health.record_failure());
+        health.record_success();
+        assert!(!health.record_failure());
+        assert!(!health.record_failure());
+        assert!(health.record_failure());
+        assert!(!health.record_failure());
+    }
+
+    #[test]
+    fn device_health_can_signal_again_after_recovery() {
+        let mut health = DeviceHealthMonitor::default();
+        for _ in 0..DEVICE_FAILURE_THRESHOLD - 1 {
+            assert!(!health.record_failure());
+        }
+        assert!(health.record_failure());
+        health.record_success();
+        for _ in 0..DEVICE_FAILURE_THRESHOLD - 1 {
+            assert!(!health.record_failure());
+        }
+        assert!(health.record_failure());
     }
 }

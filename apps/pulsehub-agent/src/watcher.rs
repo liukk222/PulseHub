@@ -9,7 +9,7 @@ pub fn run(
     exit_after: Option<Duration>,
     stopping: Arc<AtomicBool>,
     mut on_foreground_changed: impl FnMut() -> Option<Duration>,
-    mut on_commands: impl FnMut(),
+    mut on_commands: impl FnMut() -> bool,
 ) -> Result<(), String> {
     use std::sync::atomic::Ordering;
     use std::sync::mpsc;
@@ -37,7 +37,9 @@ pub fn run(
     while !stopping.load(Ordering::Acquire)
         && exit_after.is_none_or(|duration| started.elapsed() < duration)
     {
-        on_commands();
+        if on_commands() {
+            retry_at = Some(Instant::now());
+        }
         match receiver.recv_timeout(Duration::from_millis(250)) {
             Ok(()) => {
                 std::thread::sleep(Duration::from_millis(75));
@@ -64,7 +66,7 @@ pub fn run(
     _exit_after: Option<Duration>,
     _stopping: Arc<AtomicBool>,
     _on_foreground_changed: impl FnMut() -> Option<Duration>,
-    _on_commands: impl FnMut(),
+    _on_commands: impl FnMut() -> bool,
 ) -> Result<(), String> {
     Err("前台事件监听当前仅支持 Windows".to_owned())
 }
