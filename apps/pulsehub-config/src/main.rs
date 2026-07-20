@@ -3,13 +3,18 @@
 use std::env;
 use std::process::ExitCode;
 #[cfg(windows)]
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+#[cfg(windows)]
 use std::time::Duration;
 
 use pulsehub_ipc::{AgentSnapshot, PROTOCOL_VERSION, Request, Response, read_frame, write_frame};
 use pulsehub_ui::{AppWindow, MappingItem};
 use slint::ComponentHandle;
 #[cfg(windows)]
-use slint::{Model, ModelRc, VecModel};
+use slint::{Model, ModelRc, Timer, TimerMode, VecModel};
 
 #[derive(Clone, Copy)]
 enum AgentAction {
@@ -204,6 +209,32 @@ fn run_gui() -> ExitCode {
         });
     });
     refresh_gui(ui.as_weak());
+
+    let live_poll_running = Arc::new(AtomicBool::new(false));
+    let live_poll_flag = Arc::clone(&live_poll_running);
+    let live_poll_ui = ui.as_weak();
+    let live_poll_timer = Timer::default();
+    live_poll_timer.start(TimerMode::Repeated, Duration::from_millis(750), move || {
+        if live_poll_flag.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let worker_ui = live_poll_ui.clone();
+        let worker_flag = Arc::clone(&live_poll_flag);
+        std::thread::spawn(move || {
+            let snapshot = request_snapshot();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let (Ok(snapshot), Some(window)) = (snapshot, worker_ui.upgrade()) {
+                    window.set_current_dpi(
+                        snapshot
+                            .current_dpi
+                            .map_or_else(|| "—".to_owned(), |dpi| dpi.to_string())
+                            .into(),
+                    );
+                }
+                worker_flag.store(false, Ordering::Release);
+            });
+        });
+    });
 
     match ui.run() {
         Ok(()) => ExitCode::SUCCESS,

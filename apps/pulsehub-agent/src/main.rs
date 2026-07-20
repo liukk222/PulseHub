@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::env;
 use std::path::Path;
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use pulsehub_config_store::{
     ButtonActionConfig, ConfigDocument, ConfigError, ConfigRepository, ProfileConfig, ProfileName,
@@ -17,7 +17,7 @@ use pulsehub_config_store::{
 use pulsehub_core::Environment;
 use pulsehub_device::hidpp::{
     DpiWriteResult, HidppError, OnboardButtonAction, activate_first_g102_onboard_mode,
-    apply_first_g102_profile, probe_first_g102, set_first_g102_dpi,
+    apply_first_g102_profile, probe_first_g102, read_first_g102_dpi, set_first_g102_dpi,
 };
 use pulsehub_ipc::{
     AgentSnapshot, DeviceStatus, DpiCapability, Environment as IpcEnvironment, IntegrationStatus,
@@ -323,6 +323,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
     let mut backoff = RetryBackoff::default();
     let foreground_snapshot = Arc::clone(&snapshot);
     let command_snapshot = Arc::clone(&snapshot);
+    let mut last_dpi_poll = Instant::now();
     let result = watcher::run(
         exit_after_seconds.map(Duration::from_secs),
         Arc::clone(&stopping),
@@ -533,6 +534,16 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                         });
                         let _ = reply.send(result);
                     }
+                }
+            }
+            if last_dpi_poll.elapsed() >= Duration::from_millis(500) {
+                last_dpi_poll = Instant::now();
+                if let Ok(current_dpi) = read_first_g102_dpi(false) {
+                    let mut current = command_snapshot
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    current.current_dpi = Some(current_dpi);
+                    current.device_status = DeviceStatus::Ready;
                 }
             }
         },

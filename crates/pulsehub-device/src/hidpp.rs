@@ -233,6 +233,24 @@ pub fn probe_first_g102(protocol_trace: bool) -> Result<HidppProbeResult, HidppE
 }
 
 #[cfg(windows)]
+pub fn read_first_g102_dpi(protocol_trace: bool) -> Result<u16, HidppError> {
+    let mut transport = WindowsHidppTransport::open(protocol_trace)?;
+    let feature = get_feature(&mut transport, ADJUSTABLE_DPI_ID)?;
+    if feature.index == 0 {
+        return Err(HidppError::InvalidResponse(
+            "设备未公开 ADJUSTABLE_DPI (0x2201)".to_owned(),
+        ));
+    }
+    let count_response = request(&mut transport, feature.index, 0, [0, 0, 0])?;
+    if parameters(&count_response, 1)?[0] == 0 {
+        return Err(HidppError::InvalidResponse(
+            "设备没有 DPI 传感器".to_owned(),
+        ));
+    }
+    read_sensor_dpi(&mut transport, feature.index, 0).map(|(current, _)| current)
+}
+
+#[cfg(windows)]
 pub fn set_first_g102_dpi(
     requested: u16,
     protocol_trace: bool,
@@ -352,6 +370,11 @@ pub fn activate_first_g102_onboard_mode(
 
 #[cfg(not(windows))]
 pub fn probe_first_g102(_protocol_trace: bool) -> Result<HidppProbeResult, HidppError> {
+    Err(HidppError::PlatformUnsupported)
+}
+
+#[cfg(not(windows))]
+pub fn read_first_g102_dpi(_protocol_trace: bool) -> Result<u16, HidppError> {
     Err(HidppError::PlatformUnsupported)
 }
 
@@ -640,8 +663,16 @@ fn build_profile_sector(
                     "当前 DPI {dpi} 不在四个切换档位中，请先调整当前 DPI 或档位"
                 ))
             })?;
+        // The firmware keeps a separate active-slot cursor. Put the requested DPI in
+        // slot zero so the runtime DPI and cursor agree and the first G6 press advances.
         let mut slots = [0_u16; 5];
-        slots[..4].copy_from_slice(levels);
+        for (slot, level) in slots[..4].iter_mut().zip(
+            levels[default_index..]
+                .iter()
+                .chain(levels[..default_index].iter()),
+        ) {
+            *slot = *level;
+        }
         for (index, level) in slots.iter().enumerate() {
             let start = 3 + index * 2;
             let encoded = level.to_le_bytes();
@@ -650,8 +681,8 @@ fn build_profile_sector(
                 dpi_changed = true;
             }
         }
-        if desired[1] != default_index as u8 {
-            desired[1] = default_index as u8;
+        if desired[1] != 0 {
+            desired[1] = 0;
             dpi_changed = true;
         }
     } else if let Some(ProfileDpiSettings::Single(dpi)) = dpi {
@@ -1583,10 +1614,10 @@ mod tests {
 
         assert!(dpi_changed);
         assert!(changed_buttons.is_empty());
-        assert_eq!(desired[1], 3);
+        assert_eq!(desired[1], 0);
         assert_eq!(
             &desired[3..11],
-            &[0x20, 0x03, 0x40, 0x06, 0x60, 0x09, 0x80, 0x0c]
+            &[0x80, 0x0c, 0x20, 0x03, 0x40, 0x06, 0x60, 0x09]
         );
         assert_eq!(&desired[11..13], &[0, 0]);
         assert_eq!(&desired[32..56], &original[32..56]);
