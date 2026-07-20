@@ -2,7 +2,7 @@
 
 PulseHub 是一个面向 Windows 11 的轻量鼠标配置工具。MVP 目标是为 Logitech G102 LIGHTSYNC 提供真实硬件 DPI 与一对一按键映射，并在办公和 CS2 环境之间自动切换。
 
-当前仓库已完成 Cargo Workspace、Windows HID 枚举、HID++ 功能发现和 DPI 读写 POC。默认探测只读；DPI 写入必须同时提供目标值与显式设备写入确认。Win32 托盘、Slint GUI、Named Pipe 和自动配置切换仍未实现。
+当前仓库已实现并通过 G102 实机验证：Windows HID/HID++ 探测、DPI 与按键配置读写、Office/CS2 自动切换、设备重连恢复、Named Pipe IPC、Slint GUI、系统托盘和可选开发者日志。`pulsehub-agent.exe` 独立负责设备控制，关闭 GUI 后自动切换仍会继续运行。
 
 ## G102 探测
 
@@ -27,4 +27,4 @@ cargo build --workspace
 
 若全局 Cargo 镜像无法返回 `config.json` 或依赖索引，应修复/移除该镜像配置后再构建；不要修改 `Cargo.lock` 来绕过索引故障。
 
-完整架构、协议验证门槛、IPC 和测试策略见 [实现文档](docs/IMPLEMENTATION.md)。
+完整架构、协议验证门槛、IPC 和测试策略见 [实现文档索引](docs/IMPLEMENTATION.md)。继续开发前请阅读 [下一阶段开发交接](docs/NEXT_STEPS.md)。
