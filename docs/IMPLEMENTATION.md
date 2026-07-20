@@ -991,6 +991,11 @@ GUI 在载入草稿时固定 `base_revision`，保存时直接提交该修订，
 因此其他窗口先完成保存后，旧草稿会收到 `PH-IPC-CONFLICT`，保留草稿并显示“配置已在其他窗口
 更新”。存在本地草稿时，“刷新”不会静默覆盖字段，必须先保存或显式放弃更改。
 
+Office 与 CS2 配置页现从 `ConfigDocument.button_mappings` 构造独立 Slint 模型。左键和右键显示为
+受保护且不可编辑；中键、侧键与 DPI 键可在已实机验证的 `Backspace / Ctrl+V / Ctrl+C /
+Ctrl+A / 禁用` 白名单中切换。映射和 DPI 作为同一草稿先经代理 `validate_draft`，再按固定
+`base_revision` 提交；GUI 仍不打开 HID 句柄，也不把保存成功描述为闪存已写入。
+
 GUI 使用 Slint，仅在主线程运行 Slint 事件循环。所有 IPC 均在工作线程完成，再通过 Slint 的事件循环投递接口更新 UI。
 
 首版页面：

@@ -1,4 +1,5 @@
 import { Theme } from "../theme.slint";
+import { MappingItem } from "../models.slint";
 
 export component ProfilePage inherits Rectangle {
     in property <string> profile-name;
@@ -6,7 +7,9 @@ export component ProfilePage inherits Rectangle {
     in property <[int]> dpi-options;
     in property <string> process-rule;
     in property <bool> editing-enabled: true;
+    in property <[MappingItem]> mappings;
     callback dpi-changed(int);
+    callback mapping-cycle-requested(int);
     background: transparent;
     VerticalLayout {
         spacing: 20px;
@@ -31,14 +34,21 @@ export component ProfilePage inherits Rectangle {
             }
         }
         Rectangle {
-            background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: 180px;
+            background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: 310px;
             VerticalLayout { padding: 20px; spacing: 10px;
                 Text { text: "按键映射"; color: Theme.ink; font-size: 18px; font-weight: 600; }
                 Text { text: "左键、右键受到安全保护"; color: Theme.muted; font-size: 12px; }
-                Text { text: "侧后键（G4）     Ctrl + V"; color: Theme.body; font-size: 14px; }
-                Text { text: "侧前键（G5）     Ctrl + C"; color: Theme.body; font-size: 14px; }
-                Text { text: "中键             Backspace"; color: Theme.body; font-size: 14px; }
-                Text { text: "DPI 键           Ctrl + A"; color: Theme.body; font-size: 14px; }
+                for mapping[index] in root.mappings: Rectangle {
+                    height: 40px; border-color: Theme.hairline; border-width: 1px; border-radius: 8px;
+                    background: mapping.locked ? Theme.surface-soft : Theme.surface;
+                    HorizontalLayout { padding-left: 12px; padding-right: 12px; spacing: 12px;
+                        Text { text: mapping.label; color: Theme.ink; font-size: 14px; vertical-alignment: center; min-width: 150px; }
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                        Text { text: mapping.action-label; color: mapping.locked ? Theme.muted : Theme.primary; font-size: 14px; vertical-alignment: center; }
+                        Text { text: mapping.locked ? "已保护" : "点击更改"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                    }
+                    TouchArea { enabled: root.editing-enabled && !mapping.locked; clicked => { root.mapping-cycle-requested(index); } }
+                }
             }
         }
         Rectangle { vertical-stretch: 1; background: transparent; }
