@@ -177,4 +177,3 @@ pub trait HidTransport {
 - 请求、响应和事件 DTO。
 - 最大消息长度和字段上限校验。
 - Windows Named Pipe 客户端/服务端封装。
-
