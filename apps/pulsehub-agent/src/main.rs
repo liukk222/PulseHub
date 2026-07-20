@@ -1166,7 +1166,8 @@ fn apply_target_dpi(target: &EnvironmentTarget) -> Result<DpiWriteResult, ApplyF
 }
 
 fn apply_target_full(target: &EnvironmentTarget) -> Result<DpiWriteResult, ApplyFailure> {
-    let dpi_result = apply_target_dpi(target)?;
+    // 先校验目标 DPI，避免在无效值下进入板载写入事务。
+    apply_target_dpi(target)?;
     let dpi_levels = matches!(
         target.button_actions[5],
         OnboardButtonAction::Special { code: 0x05, .. }
@@ -1187,15 +1188,18 @@ fn apply_target_full(target: &EnvironmentTarget) -> Result<DpiWriteResult, Apply
     if mode.before != mode.after {
         println!("设备已切换到板载模式，按键映射现已生效。");
     }
-    // 板载 DPI 已在同一事务中更新；启用板载模式后不能再执行运行态 DPI 写入，
-    // 否则设备会回到 Host 模式并停用板载按键映射。
-    Ok(dpi_result)
+    // G102 切入板载模式时固件总是先激活 slot 0，而不是 default_dpi_index。
+    // 在 Onboard 模式下再次选择目标 DPI，并以这次回读作为 IPC 快照的真实值。
+    // 2026-07-20 实机确认该写入不会把 mode 切回 Host。
+    apply_target_dpi(target)
 }
 
 fn hidpp_apply_failure(context: &str, error: HidppError) -> ApplyFailure {
     let retryable = !matches!(
         error,
-        HidppError::PlatformUnsupported | HidppError::InvalidDpi { .. }
+        HidppError::PlatformUnsupported
+            | HidppError::InvalidDpi { .. }
+            | HidppError::InvalidResponse(_)
     );
     ApplyFailure {
         message: format!("{context}：{error}"),

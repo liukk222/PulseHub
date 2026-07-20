@@ -269,9 +269,12 @@ fn show_apply_error(ui: &slint::Weak<AppWindow>, error: &str) {
     if let Some(window) = ui.upgrade() {
         window.set_busy(false);
         window.set_save_title("配置未能应用".into());
-        window.set_save_detail(
-            format!("配置仍已安全保存。请检查设备连接或退出 G HUB 后重试：{error}").into(),
-        );
+        let guidance = if error.contains("PH-IPC-BUSY") {
+            "设备暂时忙，请稍后重试；若确有其他鼠标管理程序运行，再将其退出。"
+        } else {
+            "请按错误内容检查配置值或设备连接后重试。"
+        };
+        window.set_save_detail(format!("配置仍已安全保存。{guidance} 错误：{error}").into());
     }
 }
 

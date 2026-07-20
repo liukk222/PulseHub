@@ -227,7 +227,7 @@ impl Default for ConfigDocument {
             },
             profiles: ProfilesConfig {
                 office: ProfileConfig {
-                    dpi: 1800,
+                    dpi: 1600,
                     dpi_levels: default_dpi_levels(),
                     button_mappings: office_buttons.clone(),
                 },
@@ -275,10 +275,12 @@ impl ConfigDocument {
     }
 
     pub fn from_toml(path: &Path, text: &str) -> Result<Self, ConfigError> {
-        let document: Self = toml::from_str(text).map_err(|error| ConfigError::Parse {
+        let mut document: Self = toml::from_str(text).map_err(|error| ConfigError::Parse {
             path: path.to_path_buf(),
             message: error.to_string(),
         })?;
+        normalize_profile_dpi_levels(&mut document.profiles.office);
+        normalize_profile_dpi_levels(&mut document.profiles.cs2);
         document.validate()?;
         Ok(document)
     }
@@ -369,6 +371,11 @@ fn validate_profile(name: &str, profile: &ProfileConfig) -> Result<(), ConfigErr
             "{name} DPI 档位必须包含四个严格递增的正整数"
         )));
     }
+    if profile_uses_dpi_cycle(profile) && !profile.dpi_levels.contains(&profile.dpi) {
+        return Err(ConfigError::Validation(format!(
+            "{name} 当前 DPI 必须属于四个 DPI 切换档位"
+        )));
+    }
     let mut controls = HashSet::new();
     for mapping in &profile.button_mappings {
         if mapping.physical_control.trim().is_empty()
@@ -442,6 +449,34 @@ fn default_dpi_levels() -> Vec<u16> {
     vec![800, 1600, 2400, 3200]
 }
 
+fn profile_uses_dpi_cycle(profile: &ProfileConfig) -> bool {
+    profile.button_mappings.iter().any(|mapping| {
+        mapping.physical_control == "g102:dpi"
+            && matches!(
+                &mapping.action,
+                ButtonActionConfig::LogicalControl { value } if value == "mouse:dpi_cycle"
+            )
+    })
+}
+
+fn normalize_profile_dpi_levels(profile: &mut ProfileConfig) {
+    if !profile_uses_dpi_cycle(profile)
+        || profile.dpi_levels.len() != 4
+        || profile.dpi_levels.contains(&profile.dpi)
+    {
+        return;
+    }
+    let nearest = profile
+        .dpi_levels
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, level)| level.abs_diff(profile.dpi))
+        .map(|(index, _)| index)
+        .unwrap_or(0);
+    profile.dpi_levels[nearest] = profile.dpi;
+    profile.dpi_levels.sort_unstable();
+}
+
 fn logical(value: &str) -> ButtonActionConfig {
     ButtonActionConfig::LogicalControl {
         value: value.to_owned(),
@@ -499,6 +534,19 @@ mod tests {
                 }));
             }
         }
+    }
+
+    #[test]
+    fn legacy_dpi_cycle_profile_keeps_current_dpi_during_level_migration() {
+        let mut document = ConfigDocument::default();
+        document.profiles.office.dpi = 1800;
+        document.profiles.office.dpi_levels = vec![800, 1600, 2400, 3200];
+        let text = toml::to_string_pretty(&document).unwrap();
+
+        let migrated = ConfigDocument::from_toml("config.toml".as_ref(), &text).unwrap();
+
+        assert_eq!(migrated.profiles.office.dpi, 1800);
+        assert_eq!(migrated.profiles.office.dpi_levels, [800, 1800, 2400, 3200]);
     }
 
     #[test]
