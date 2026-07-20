@@ -166,6 +166,12 @@ pub struct OnboardModeWriteResult {
     pub after: OnboardMode,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ProfileDpiSettings<'a> {
+    Single(u16),
+    Levels { dpi: u16, levels: &'a [u16; 4] },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HidppError {
     PlatformUnsupported,
@@ -298,6 +304,7 @@ pub fn apply_first_g102_button_actions(
 pub fn apply_first_g102_profile(
     actions: &[OnboardButtonAction; 6],
     dpi: u16,
+    dpi_levels: Option<&[u16; 4]>,
     protocol_trace: bool,
 ) -> Result<OnboardWriteResult, HidppError> {
     let mut transport = WindowsHidppTransport::open(protocol_trace)?;
@@ -307,6 +314,9 @@ pub fn apply_first_g102_profile(
             transport.product_id, transport.release_number
         )));
     }
+    let dpi = dpi_levels.map_or(ProfileDpiSettings::Single(dpi), |levels| {
+        ProfileDpiSettings::Levels { dpi, levels }
+    });
     apply_profile_settings(&mut transport, actions, Some(dpi))
 }
 
@@ -372,6 +382,7 @@ pub fn apply_first_g102_button_actions(
 pub fn apply_first_g102_profile(
     _actions: &[OnboardButtonAction; 6],
     _dpi: u16,
+    _dpi_levels: Option<&[u16; 4]>,
     _protocol_trace: bool,
 ) -> Result<OnboardWriteResult, HidppError> {
     Err(HidppError::PlatformUnsupported)
@@ -497,7 +508,7 @@ fn set_onboard_mode(
 fn apply_profile_settings(
     transport: &mut impl Transport,
     actions: &[OnboardButtonAction; 6],
-    dpi: Option<u16>,
+    dpi: Option<ProfileDpiSettings<'_>>,
 ) -> Result<OnboardWriteResult, HidppError> {
     let feature = get_feature(transport, ONBOARD_PROFILES_ID)?;
     if feature.index == 0 {
@@ -610,7 +621,7 @@ fn build_profile_sector(
     original: &[u8],
     button_count: u8,
     actions: &[OnboardButtonAction; 6],
-    dpi: Option<u16>,
+    dpi: Option<ProfileDpiSettings<'_>>,
 ) -> Result<(Vec<u8>, Vec<usize>, bool), HidppError> {
     validate_sector_crc(original)?;
     if button_count != 6 || original.len() != 255 {
@@ -620,7 +631,30 @@ fn build_profile_sector(
     }
     let mut desired = original.to_vec();
     let mut dpi_changed = false;
-    if let Some(dpi) = dpi {
+    if let Some(ProfileDpiSettings::Levels { dpi, levels }) = dpi {
+        let default_index = levels
+            .iter()
+            .position(|level| *level == dpi)
+            .ok_or_else(|| {
+                HidppError::InvalidResponse(format!(
+                    "当前 DPI {dpi} 不在四个切换档位中，请先调整当前 DPI 或档位"
+                ))
+            })?;
+        let mut slots = [0_u16; 5];
+        slots[..4].copy_from_slice(levels);
+        for (index, level) in slots.iter().enumerate() {
+            let start = 3 + index * 2;
+            let encoded = level.to_le_bytes();
+            if desired[start..start + 2] != encoded {
+                desired[start..start + 2].copy_from_slice(&encoded);
+                dpi_changed = true;
+            }
+        }
+        if desired[1] != default_index as u8 {
+            desired[1] = default_index as u8;
+            dpi_changed = true;
+        }
+    } else if let Some(ProfileDpiSettings::Single(dpi)) = dpi {
         let default_index = usize::from(desired[1]);
         if default_index >= 5 {
             return Err(HidppError::InvalidResponse(format!(
@@ -1295,7 +1329,7 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        DpiSensorInfo, HidppError, OnboardButtonAction, OnboardMode, Transport,
+        DpiSensorInfo, HidppError, OnboardButtonAction, OnboardMode, ProfileDpiSettings, Transport,
         build_office_profile_sector, build_profile_sector, crc_ccitt, encode_onboard_button,
         g102_office_button_actions, parse_dpi_list, parse_onboard_profile, parse_onboard_profiles,
         request_long, response_matches, set_onboard_mode, set_sensor_dpi, validate_requested_dpi,
@@ -1536,12 +1570,25 @@ mod tests {
         let crc = crc_ccitt(&original[..253]);
         original[253..].copy_from_slice(&crc.to_be_bytes());
 
-        let (desired, changed_buttons, dpi_changed) =
-            build_profile_sector(&original, 6, &g102_office_button_actions(), Some(3200)).unwrap();
+        let (desired, changed_buttons, dpi_changed) = build_profile_sector(
+            &original,
+            6,
+            &g102_office_button_actions(),
+            Some(ProfileDpiSettings::Levels {
+                dpi: 3200,
+                levels: &[800, 1600, 2400, 3200],
+            }),
+        )
+        .unwrap();
 
         assert!(dpi_changed);
         assert!(changed_buttons.is_empty());
-        assert_eq!(&desired[7..9], &3200_u16.to_le_bytes());
+        assert_eq!(desired[1], 3);
+        assert_eq!(
+            &desired[3..11],
+            &[0x20, 0x03, 0x40, 0x06, 0x60, 0x09, 0x80, 0x0c]
+        );
+        assert_eq!(&desired[11..13], &[0, 0]);
         assert_eq!(&desired[32..56], &original[32..56]);
         assert_eq!(
             crc_ccitt(&desired[..253]),

@@ -26,6 +26,16 @@ export component AppWindow inherits Window {
     in-out property <bool> captured-meta: false;
     in-out property <int> office-dpi: 3200;
     in-out property <int> cs2-dpi: 100;
+    in-out property <int> office-dpi-level-1: 800;
+    in-out property <int> office-dpi-level-2: 1600;
+    in-out property <int> office-dpi-level-3: 2400;
+    in-out property <int> office-dpi-level-4: 3200;
+    in-out property <int> cs2-dpi-level-1: 800;
+    in-out property <int> cs2-dpi-level-2: 1600;
+    in-out property <int> cs2-dpi-level-3: 2400;
+    in-out property <int> cs2-dpi-level-4: 3200;
+    in-out property <bool> office-dpi-cycle-enabled: false;
+    in-out property <bool> cs2-dpi-cycle-enabled: false;
     in property <[int]> dpi-options;
     in property <int> dpi-minimum: 1;
     in property <int> dpi-maximum: 65535;
@@ -50,6 +60,7 @@ export component AppWindow inherits Window {
     callback mapping-restore-requested(bool, int);
     callback mapping-key-requested(bool, int, string, bool, bool, bool, bool);
     callback custom-dpi-requested(bool, string);
+    callback dpi-level-requested(bool, int, string);
     callback discard-and-close-requested();
     callback retry-apply-requested();
 
@@ -80,8 +91,8 @@ export component AppWindow inherits Window {
             Rectangle {
                 horizontal-stretch: 1; background: Theme.canvas;
                 if root.selected-page == 0: OverviewPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; device-status: root.device-status; environment-name: root.environment-name; current-dpi: root.current-dpi; desired-dpi: root.desired-dpi; apply-title: root.save-title; apply-detail: root.save-detail; apply-enabled: !root.busy && !root.draft-dirty; retry-apply-requested => { root.retry-apply-requested(); } }
-                if root.selected-page == 1: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "Office"; dpi: root.office-dpi; dpi-options: root.dpi-options; mappings: root.office-mappings; process-rule: ""; editing-enabled: !root.busy; dpi-changed(value) => { root.office-dpi = value; root.draft-dirty = true; } custom-dpi-submitted(value) => { root.custom-dpi-requested(true, value); } mapping-input-requested(index) => { root.open-mapping-capture(true, index); } mapping-restore-requested(index) => { root.mapping-restore-requested(true, index); } }
-                if root.selected-page == 2: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "CS2"; dpi: root.cs2-dpi; dpi-options: root.dpi-options; mappings: root.cs2-mappings; process-rule: "cs2.exe"; editing-enabled: !root.busy; dpi-changed(value) => { root.cs2-dpi = value; root.draft-dirty = true; } custom-dpi-submitted(value) => { root.custom-dpi-requested(false, value); } mapping-input-requested(index) => { root.open-mapping-capture(false, index); } mapping-restore-requested(index) => { root.mapping-restore-requested(false, index); } }
+                if root.selected-page == 1: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "Office"; dpi: root.office-dpi; dpi-options: root.dpi-options; mappings: root.office-mappings; dpi-cycle-enabled: root.office-dpi-cycle-enabled; dpi-level-1: root.office-dpi-level-1; dpi-level-2: root.office-dpi-level-2; dpi-level-3: root.office-dpi-level-3; dpi-level-4: root.office-dpi-level-4; process-rule: ""; editing-enabled: !root.busy; dpi-changed(value) => { root.office-dpi = value; root.draft-dirty = true; } custom-dpi-submitted(value) => { root.custom-dpi-requested(true, value); } dpi-level-submitted(index, value) => { root.dpi-level-requested(true, index, value); } mapping-input-requested(index) => { root.open-mapping-capture(true, index); } mapping-restore-requested(index) => { root.mapping-restore-requested(true, index); } }
+                if root.selected-page == 2: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "CS2"; dpi: root.cs2-dpi; dpi-options: root.dpi-options; mappings: root.cs2-mappings; dpi-cycle-enabled: root.cs2-dpi-cycle-enabled; dpi-level-1: root.cs2-dpi-level-1; dpi-level-2: root.cs2-dpi-level-2; dpi-level-3: root.cs2-dpi-level-3; dpi-level-4: root.cs2-dpi-level-4; process-rule: "cs2.exe"; editing-enabled: !root.busy; dpi-changed(value) => { root.cs2-dpi = value; root.draft-dirty = true; } custom-dpi-submitted(value) => { root.custom-dpi-requested(false, value); } dpi-level-submitted(index, value) => { root.dpi-level-requested(false, index, value); } mapping-input-requested(index) => { root.open-mapping-capture(false, index); } mapping-restore-requested(index) => { root.mapping-restore-requested(false, index); } }
                 if root.selected-page == 3: SettingsPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; revision: root.revision; selection-mode: root.selection-mode; start-with-windows: root.start-with-windows; integration-status: root.integration-status; editing-enabled: !root.busy; selection-mode-cycle => { root.selection-mode = root.selection-mode == "自动" ? "固定 Office" : root.selection-mode == "固定 Office" ? "固定 CS2" : "自动"; root.draft-dirty = true; } start-with-windows-toggle => { root.start-with-windows = !root.start-with-windows; root.draft-dirty = true; } }
             }
         }

@@ -70,6 +70,8 @@ pub struct ProfilesConfig {
 #[serde(deny_unknown_fields)]
 pub struct ProfileConfig {
     pub dpi: u16,
+    #[serde(default = "default_dpi_levels")]
+    pub dpi_levels: Vec<u16>,
     #[serde(default)]
     pub button_mappings: Vec<ButtonMappingConfig>,
 }
@@ -226,10 +228,12 @@ impl Default for ConfigDocument {
             profiles: ProfilesConfig {
                 office: ProfileConfig {
                     dpi: 1800,
+                    dpi_levels: default_dpi_levels(),
                     button_mappings: office_buttons.clone(),
                 },
                 cs2: ProfileConfig {
                     dpi: 800,
+                    dpi_levels: default_dpi_levels(),
                     button_mappings: office_buttons,
                 },
             },
@@ -357,6 +361,14 @@ fn validate_profile(name: &str, profile: &ProfileConfig) -> Result<(), ConfigErr
     if profile.dpi == 0 {
         return Err(ConfigError::Validation(format!("{name} DPI 必须大于 0")));
     }
+    if profile.dpi_levels.len() != 4
+        || profile.dpi_levels.contains(&0)
+        || !profile.dpi_levels.windows(2).all(|pair| pair[0] < pair[1])
+    {
+        return Err(ConfigError::Validation(format!(
+            "{name} DPI 档位必须包含四个严格递增的正整数"
+        )));
+    }
     let mut controls = HashSet::new();
     for mapping in &profile.button_mappings {
         if mapping.physical_control.trim().is_empty()
@@ -426,6 +438,10 @@ fn office_button_mappings() -> Vec<ButtonMappingConfig> {
     .collect()
 }
 
+fn default_dpi_levels() -> Vec<u16> {
+    vec![800, 1600, 2400, 3200]
+}
+
 fn logical(value: &str) -> ButtonActionConfig {
     ButtonActionConfig::LogicalControl {
         value: value.to_owned(),
@@ -465,6 +481,7 @@ mod tests {
     fn first_run_defaults_keep_all_original_mouse_controls() {
         let document = ConfigDocument::default();
         for profile in [&document.profiles.office, &document.profiles.cs2] {
+            assert_eq!(profile.dpi_levels, [800, 1600, 2400, 3200]);
             for (control, expected) in [
                 ("g102:left", "mouse:left"),
                 ("g102:right", "mouse:right"),

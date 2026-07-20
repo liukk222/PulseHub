@@ -47,6 +47,7 @@ struct EnvironmentTarget {
     environment: Environment,
     dpi: u16,
     button_actions: [OnboardButtonAction; 6],
+    dpi_levels: [u16; 4],
 }
 
 #[derive(Debug)]
@@ -1045,12 +1046,18 @@ fn resolve_target(config: &ConfigDocument) -> Result<EnvironmentTarget, String> 
     };
     let dpi = profile.dpi;
     let button_actions = button_actions_for_profile(profile)?;
+    let dpi_levels = profile
+        .dpi_levels
+        .clone()
+        .try_into()
+        .map_err(|_| "DPI 档位必须正好包含四项".to_owned())?;
     Ok(EnvironmentTarget {
         executable_name: foreground.executable_name,
         process_id: foreground.process_id,
         environment,
         dpi,
         button_actions,
+        dpi_levels,
     })
 }
 
@@ -1160,7 +1167,12 @@ fn apply_target_dpi(target: &EnvironmentTarget) -> Result<DpiWriteResult, ApplyF
 
 fn apply_target_full(target: &EnvironmentTarget) -> Result<DpiWriteResult, ApplyFailure> {
     let dpi_result = apply_target_dpi(target)?;
-    let profile = apply_first_g102_profile(&target.button_actions, target.dpi, false)
+    let dpi_levels = matches!(
+        target.button_actions[5],
+        OnboardButtonAction::Special { code: 0x05, .. }
+    )
+    .then_some(&target.dpi_levels);
+    let profile = apply_first_g102_profile(&target.button_actions, target.dpi, dpi_levels, false)
         .map_err(|error| hidpp_apply_failure("板载配置写入失败", error))?;
     if profile.changed_buttons.is_empty() && !profile.dpi_changed {
         println!("板载 DPI 与按键映射已和当前环境一致，跳过闪存写入。");
@@ -1359,6 +1371,7 @@ mod tests {
             dpi: 800,
             button_actions: button_actions_for_profile(&ConfigDocument::default().profiles.cs2)
                 .unwrap(),
+            dpi_levels: [800, 1600, 2400, 3200],
         };
 
         let snapshot = snapshot_for_target(&target, 7, DeviceStatus::Ready, Some(800));

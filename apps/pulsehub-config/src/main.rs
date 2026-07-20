@@ -102,6 +102,14 @@ fn run_gui() -> ExitCode {
                 .upgrade()
                 .map(|ui| mapping_selections(&ui.get_cs2_mappings()))
                 .unwrap_or_default();
+            let office_dpi_levels = save_ui
+                .upgrade()
+                .map(|ui| dpi_levels_from_ui(&ui, true))
+                .unwrap_or([800, 1600, 2400, 3200]);
+            let cs2_dpi_levels = save_ui
+                .upgrade()
+                .map(|ui| dpi_levels_from_ui(&ui, false))
+                .unwrap_or([800, 1600, 2400, 3200]);
             let worker_ui = save_ui.clone();
             std::thread::spawn(move || {
                 let result = save_gui_config(
@@ -110,6 +118,8 @@ fn run_gui() -> ExitCode {
                     base_revision as u64,
                     &office_mappings,
                     &cs2_mappings,
+                    office_dpi_levels,
+                    cs2_dpi_levels,
                     selection_mode.as_str(),
                     start_with_windows,
                 );
@@ -156,6 +166,10 @@ fn run_gui() -> ExitCode {
     let dpi_ui = ui.as_weak();
     ui.on_custom_dpi_requested(move |office, value| {
         set_custom_dpi(&dpi_ui, office, value.as_str())
+    });
+    let level_ui = ui.as_weak();
+    ui.on_dpi_level_requested(move |office, index, value| {
+        set_dpi_level(&level_ui, office, index, value.as_str())
     });
 
     let discard_ui = ui.as_weak();
@@ -314,8 +328,12 @@ fn apply_gui_state(
     }
     ui.set_office_dpi(config.profiles.office.dpi.into());
     ui.set_cs2_dpi(config.profiles.cs2.dpi.into());
+    set_dpi_levels_on_ui(ui, true, &config.profiles.office.dpi_levels);
+    set_dpi_levels_on_ui(ui, false, &config.profiles.cs2.dpi_levels);
     ui.set_office_mappings(mapping_model(&config.profiles.office.button_mappings));
     ui.set_cs2_mappings(mapping_model(&config.profiles.cs2.button_mappings));
+    ui.set_office_dpi_cycle_enabled(profile_uses_dpi_cycle(&config.profiles.office));
+    ui.set_cs2_dpi_cycle_enabled(profile_uses_dpi_cycle(&config.profiles.cs2));
     ui.set_selection_mode(selection_mode_label(config.selection.mode).into());
     ui.set_start_with_windows(config.agent.start_with_windows);
     ui.set_integration_status(
@@ -355,12 +373,15 @@ fn load_gui_state() -> Result<(AgentSnapshot, pulsehub_config_store::ConfigDocum
 }
 
 #[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
 fn save_gui_config(
     office_dpi: u16,
     cs2_dpi: u16,
     base_revision: u64,
     office_mappings: &[(String, String)],
     cs2_mappings: &[(String, String)],
+    office_dpi_levels: [u16; 4],
+    cs2_dpi_levels: [u16; 4],
     selection_mode: &str,
     start_with_windows: bool,
 ) -> Result<(AgentSnapshot, pulsehub_config_store::ConfigDocument), String> {
@@ -371,6 +392,8 @@ fn save_gui_config(
         pulsehub_config_store::load_or_create_default(&path).map_err(|error| error.to_string())?;
     config.profiles.office.dpi = office_dpi;
     config.profiles.cs2.dpi = cs2_dpi;
+    config.profiles.office.dpi_levels = office_dpi_levels.to_vec();
+    config.profiles.cs2.dpi_levels = cs2_dpi_levels.to_vec();
     apply_mapping_selections(&mut config.profiles.office.button_mappings, office_mappings)?;
     apply_mapping_selections(&mut config.profiles.cs2.button_mappings, cs2_mappings)?;
     config.selection.mode = selection_mode_from_label(selection_mode)?;
@@ -499,7 +522,7 @@ fn restore_mapping(ui: &slint::Weak<AppWindow>, office: bool, index: i32) {
         return;
     };
     let (id, label) = original_action(row.control_id.as_str());
-    update_mapping_row(&ui, &model, index, id, label);
+    update_mapping_row(&ui, &model, office, index, id, label);
 }
 
 #[cfg(windows)]
@@ -524,6 +547,95 @@ fn set_custom_dpi(ui: &slint::Weak<AppWindow>, office: bool, text: &str) {
     ui.set_draft_dirty(true);
     ui.set_save_title("自定义 DPI 已加入草稿".into());
     ui.set_save_detail(format!("{value} DPI 将在保存配置后生效。").into());
+}
+
+#[cfg(windows)]
+fn set_dpi_level(ui: &slint::Weak<AppWindow>, office: bool, index: i32, text: &str) {
+    let Some(ui) = ui.upgrade() else { return };
+    let value = match validate_custom_dpi(
+        text,
+        ui.get_dpi_minimum(),
+        ui.get_dpi_maximum(),
+        ui.get_dpi_step(),
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            ui.set_save_title("DPI 档位无效".into());
+            ui.set_save_detail(error.into());
+            return;
+        }
+    };
+    let Ok(index) = usize::try_from(index) else {
+        return;
+    };
+    if index >= 4 {
+        return;
+    }
+    let mut levels = dpi_levels_from_ui(&ui, office).map(i32::from);
+    levels[index] = value;
+    if !levels.windows(2).all(|pair| pair[0] < pair[1]) {
+        ui.set_save_title("DPI 档位顺序无效".into());
+        ui.set_save_detail("四个 DPI 档位必须从低到高排列且不能重复。".into());
+        return;
+    }
+    set_dpi_levels_i32_on_ui(&ui, office, levels);
+    ui.set_draft_dirty(true);
+    ui.set_save_title("DPI 档位已加入草稿".into());
+    ui.set_save_detail(format!("档位 {} 已设置为 {value} DPI。", index + 1).into());
+}
+
+#[cfg(windows)]
+fn dpi_levels_from_ui(ui: &AppWindow, office: bool) -> [u16; 4] {
+    let levels = if office {
+        [
+            ui.get_office_dpi_level_1(),
+            ui.get_office_dpi_level_2(),
+            ui.get_office_dpi_level_3(),
+            ui.get_office_dpi_level_4(),
+        ]
+    } else {
+        [
+            ui.get_cs2_dpi_level_1(),
+            ui.get_cs2_dpi_level_2(),
+            ui.get_cs2_dpi_level_3(),
+            ui.get_cs2_dpi_level_4(),
+        ]
+    };
+    levels.map(|value| u16::try_from(value).unwrap_or_default())
+}
+
+#[cfg(windows)]
+fn set_dpi_levels_on_ui(ui: &AppWindow, office: bool, levels: &[u16]) {
+    if let Ok(levels) = <[u16; 4]>::try_from(levels) {
+        set_dpi_levels_i32_on_ui(ui, office, levels.map(i32::from));
+    }
+}
+
+#[cfg(windows)]
+fn set_dpi_levels_i32_on_ui(ui: &AppWindow, office: bool, levels: [i32; 4]) {
+    if office {
+        ui.set_office_dpi_level_1(levels[0]);
+        ui.set_office_dpi_level_2(levels[1]);
+        ui.set_office_dpi_level_3(levels[2]);
+        ui.set_office_dpi_level_4(levels[3]);
+    } else {
+        ui.set_cs2_dpi_level_1(levels[0]);
+        ui.set_cs2_dpi_level_2(levels[1]);
+        ui.set_cs2_dpi_level_3(levels[2]);
+        ui.set_cs2_dpi_level_4(levels[3]);
+    }
+}
+
+#[cfg(windows)]
+fn profile_uses_dpi_cycle(profile: &pulsehub_config_store::ProfileConfig) -> bool {
+    profile.button_mappings.iter().any(|mapping| {
+        mapping.physical_control == "g102:dpi"
+            && matches!(
+                &mapping.action,
+                pulsehub_config_store::ButtonActionConfig::LogicalControl { value }
+                    if value == "mouse:dpi_cycle"
+            )
+    })
 }
 
 fn validate_custom_dpi(text: &str, minimum: i32, maximum: i32, step: i32) -> Result<i32, String> {
@@ -572,6 +684,7 @@ fn capture_mapping(
             update_mapping_row(
                 &ui,
                 &model,
+                office,
                 index,
                 &format!("key:{usage}:{modifiers}"),
                 &label,
@@ -588,6 +701,7 @@ fn capture_mapping(
 fn update_mapping_row(
     ui: &AppWindow,
     model: &ModelRc<MappingItem>,
+    office: bool,
     index: usize,
     id: &str,
     label: &str,
@@ -601,6 +715,17 @@ fn update_mapping_row(
     row.action_id = id.into();
     row.action_label = label.into();
     model.set_row_data(index, row);
+    if model
+        .row_data(index)
+        .is_some_and(|row| row.control_id.as_str() == "g102:dpi")
+    {
+        let enabled = id == "dpi_cycle";
+        if office {
+            ui.set_office_dpi_cycle_enabled(enabled);
+        } else {
+            ui.set_cs2_dpi_cycle_enabled(enabled);
+        }
+    }
     ui.set_draft_dirty(true);
 }
 

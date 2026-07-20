@@ -10,10 +10,16 @@ export component ProfilePage inherits Rectangle {
     in property <string> process-rule;
     in property <bool> editing-enabled: true;
     in property <[MappingItem]> mappings;
+    in property <bool> dpi-cycle-enabled: false;
+    in property <int> dpi-level-1: 800;
+    in property <int> dpi-level-2: 1600;
+    in property <int> dpi-level-3: 2400;
+    in property <int> dpi-level-4: 3200;
     callback dpi-changed(int);
     callback custom-dpi-submitted(string);
     callback mapping-input-requested(int);
     callback mapping-restore-requested(int);
+    callback dpi-level-submitted(int, string);
     background: transparent;
     ScrollView {
       viewport-width: self.width;
@@ -53,6 +59,25 @@ export component ProfilePage inherits Rectangle {
                         enabled: root.editing-enabled;
                         clicked => { root.custom-dpi-submitted(custom-dpi.text); }
                     }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                }
+            }
+        }
+        if root.dpi-cycle-enabled: Rectangle {
+            background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: 250px;
+            VerticalLayout { padding: 20px; spacing: 8px;
+                Text { text: "DPI 切换键档位"; color: Theme.ink; font-size: 18px; font-weight: 600; }
+                Text { text: "G6 使用原本 DPI 切换功能时，在以下四档间循环；按 Enter 确认修改。"; color: Theme.muted; font-size: 12px; }
+                for level[index] in [root.dpi-level-1, root.dpi-level-2, root.dpi-level-3, root.dpi-level-4]: HorizontalLayout {
+                    spacing: 12px;
+                    Text { text: "档位 " + (index + 1); color: Theme.body; font-size: 14px; vertical-alignment: center; min-width: 70px; }
+                    LineEdit {
+                        text: level;
+                        input-type: InputType.number;
+                        enabled: root.editing-enabled;
+                        accepted(value) => { root.dpi-level-submitted(index, value); }
+                    }
+                    Text { text: "DPI"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
                     Rectangle { horizontal-stretch: 1; background: transparent; }
                 }
             }
