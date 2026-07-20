@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod foreground;
+mod local_log;
 mod watcher;
 
 #[cfg(windows)]
@@ -162,6 +163,9 @@ enum DeviceCommand {
 }
 
 fn main() -> ExitCode {
+    if let Err(error) = local_log::initialize() {
+        eprintln!("本地日志初始化失败：{error}");
+    }
     let arguments = match parse_arguments() {
         Ok(arguments) => arguments,
         Err(message) => {
@@ -386,7 +390,12 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
         })
     };
     match ready_rx.recv() {
-        Ok(Ok(())) => println!("统一代理已启动：前台监听 + HID 应用 + IPC 快照。"),
+        Ok(Ok(())) => {
+            println!("统一代理已启动：前台监听 + HID 应用 + IPC 快照。");
+            local_log::info(format_args!(
+                "统一代理已启动：前台监听 + HID 应用 + IPC 快照"
+            ));
+        }
         Ok(Err(error)) => {
             eprintln!("IPC 管道创建失败：{error}");
             return ExitCode::FAILURE;
@@ -415,6 +424,9 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                 tracker.invalidate();
                 switch_guard.pending = None;
                 println!("设备健康检查连续失败，当前环境状态已失效，开始重新连接并恢复配置。");
+                local_log::error(format_args!(
+                    "设备健康检查连续失败；当前环境状态失效，开始重新连接并恢复配置"
+                ));
             }
             let current_config = repository.borrow().document().clone();
             let target = match resolve_target(&current_config) {
@@ -425,6 +437,10 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                         "前台进程识别暂时失败：{error}；{} ms 后重试。",
                         delay.as_millis()
                     );
+                    local_log::error(format_args!(
+                        "前台进程识别失败：{error}；{} ms 后重试",
+                        delay.as_millis()
+                    ));
                     return Some(delay);
                 }
             };
@@ -440,6 +456,11 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                             target.environment,
                             ENVIRONMENT_STABLE_FOR.as_millis()
                         );
+                        local_log::info(format_args!(
+                            "检测到目标环境 {:?}；稳定 {} ms 后应用",
+                            target.environment,
+                            ENVIRONMENT_STABLE_FOR.as_millis()
+                        ));
                     }
                     return Some(delay);
                 }
@@ -481,6 +502,11 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                 Err(error) if error.retryable => {
                     let delay = backoff.record_failure();
                     eprintln!("{}；{} ms 后重试。", error.message, delay.as_millis());
+                    local_log::error(format_args!(
+                        "{}；{} ms 后重试",
+                        error.message,
+                        delay.as_millis()
+                    ));
                     Some(delay)
                 }
                 Err(error) => {
@@ -490,6 +516,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
             }
         },
         || {
+            local_log::run_periodic_maintenance();
             let mut request_recovery = false;
             while let Ok(command) = command_rx.try_recv() {
                 match command {
@@ -655,6 +682,9 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                     }
                     Err(error) if device_health.record_failure() => {
                         eprintln!("DPI 健康检查连续 {DEVICE_FAILURE_THRESHOLD} 次失败：{error}");
+                        local_log::error(format_args!(
+                            "DPI 健康检查连续 {DEVICE_FAILURE_THRESHOLD} 次失败：{error}"
+                        ));
                         let mut current = command_snapshot
                             .write()
                             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1269,6 +1299,13 @@ fn print_target(target: &EnvironmentTarget, snapshot: &AgentSnapshot) {
         snapshot.active_environment,
         snapshot.desired_dpi
     );
+    local_log::info(format_args!(
+        "环境切换目标：进程={} PID={} 环境={:?} DPI={}",
+        target.executable_name,
+        target.process_id,
+        snapshot.active_environment,
+        snapshot.desired_dpi
+    ));
 }
 
 fn apply_target_dpi(target: &EnvironmentTarget) -> Result<DpiWriteResult, ApplyFailure> {
@@ -1278,10 +1315,18 @@ fn apply_target_dpi(target: &EnvironmentTarget) -> Result<DpiWriteResult, ApplyF
                 "运行态 DPI 已从 {} 设置为 {}，回读通过。",
                 result.before, result.after
             );
+            local_log::info(format_args!(
+                "运行态 DPI 写入并回读成功：{} -> {}",
+                result.before, result.after
+            ));
             Ok(result)
         }
         Ok(result) => {
             println!("运行态 DPI 已是 {}，跳过重复写入。", result.after);
+            local_log::info(format_args!(
+                "运行态 DPI 已是 {}；跳过重复写入",
+                result.after
+            ));
             Ok(result)
         }
         Err(error) => {
@@ -1289,10 +1334,9 @@ fn apply_target_dpi(target: &EnvironmentTarget) -> Result<DpiWriteResult, ApplyF
                 error,
                 HidppError::PlatformUnsupported | HidppError::InvalidDpi { .. }
             );
-            Err(ApplyFailure {
-                message: format!("运行态 DPI 应用失败：{error}"),
-                retryable,
-            })
+            let message = format!("运行态 DPI 应用失败：{error}");
+            local_log::error(format_args!("{message}"));
+            Err(ApplyFailure { message, retryable })
         }
     }
 }
@@ -1309,16 +1353,25 @@ fn apply_target_full(target: &EnvironmentTarget) -> Result<DpiWriteResult, Apply
         .map_err(|error| hidpp_apply_failure("板载配置写入失败", error))?;
     if profile.changed_buttons.is_empty() && !profile.dpi_changed {
         println!("板载 DPI 与按键映射已和当前环境一致，跳过闪存写入。");
+        local_log::info(format_args!("板载配置与当前环境一致；跳过闪存写入"));
     } else {
         println!(
             "板载配置已写入并回读通过：DPI 变更={}，按键槽位 {:?}。",
             profile.dpi_changed, profile.changed_buttons
         );
+        local_log::info(format_args!(
+            "板载配置写入并回读成功：DPI变更={} 按键槽位={:?}",
+            profile.dpi_changed, profile.changed_buttons
+        ));
     }
     let mode = activate_first_g102_onboard_mode(false)
         .map_err(|error| hidpp_apply_failure("板载模式启用失败", error))?;
     if mode.before != mode.after {
         println!("设备已切换到板载模式，按键映射现已生效。");
+        local_log::info(format_args!(
+            "设备模式切换：{:?} -> {:?}",
+            mode.before, mode.after
+        ));
     }
     // G102 切入板载模式时固件总是先激活 slot 0，而不是 default_dpi_index。
     // 在 Onboard 模式下再次选择目标 DPI，并以这次回读作为 IPC 快照的真实值。
@@ -1333,10 +1386,9 @@ fn hidpp_apply_failure(context: &str, error: HidppError) -> ApplyFailure {
             | HidppError::InvalidDpi { .. }
             | HidppError::InvalidResponse(_)
     );
-    ApplyFailure {
-        message: format!("{context}：{error}"),
-        retryable,
-    }
+    let message = format!("{context}：{error}");
+    local_log::error(format_args!("{message}"));
+    ApplyFailure { message, retryable }
 }
 
 fn selected_environment(config: &ConfigDocument, executable_name: Option<&str>) -> Environment {
