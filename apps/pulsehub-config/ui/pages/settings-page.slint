@@ -3,16 +3,18 @@ export component SettingsPage inherits Rectangle {
     in property <string> revision;
     in property <string> selection-mode;
     in property <bool> start-with-windows;
+    in property <bool> developer-logging;
     in property <bool> editing-enabled: true;
     in property <string> integration-status;
     callback selection-mode-cycle();
     callback start-with-windows-toggle();
+    callback developer-logging-toggle();
     background: transparent;
     VerticalLayout {
         spacing: 20px;
         Text { text: "设置"; color: Theme.ink; font-size: 26px; font-weight: 600; }
         Text { text: "代理行为、环境选择与诊断信息。"; color: Theme.muted; font-size: 14px; }
-        Rectangle { background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: 180px;
+        Rectangle { background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: 260px;
             VerticalLayout { padding: 20px; spacing: 14px;
                 Rectangle { height: 44px; border-color: Theme.hairline; border-width: 1px; border-radius: 8px; background: Theme.surface;
                     HorizontalLayout { padding-left: 12px; padding-right: 12px;
@@ -24,6 +26,16 @@ export component SettingsPage inherits Rectangle {
                     TouchArea { enabled: root.editing-enabled; clicked => { root.start-with-windows-toggle(); } }
                 }
                 Text { text: "系统集成：" + root.integration-status; color: Theme.muted; font-size: 12px; }
+                Rectangle { height: 44px; border-color: Theme.hairline; border-width: 1px; border-radius: 8px; background: Theme.surface;
+                    HorizontalLayout { padding-left: 12px; padding-right: 12px;
+                        Text { text: "开发者日志"; color: Theme.ink; font-size: 14px; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                        Text { text: root.developer-logging ? "已开启" : "已关闭"; color: Theme.primary; font-size: 14px; vertical-alignment: center; }
+                        Text { text: "点击切换"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                    }
+                    TouchArea { enabled: root.editing-enabled; clicked => { root.developer-logging-toggle(); } }
+                }
+                Text { text: "开启后记录环境切换、DPI、板载写入及失败原因；默认关闭。"; color: Theme.muted; font-size: 12px; }
                 Rectangle { height: 44px; border-color: Theme.hairline; border-width: 1px; border-radius: 8px; background: Theme.surface;
                     HorizontalLayout { padding-left: 12px; padding-right: 12px;
                         Text { text: "环境选择"; color: Theme.ink; font-size: 14px; vertical-alignment: center; }

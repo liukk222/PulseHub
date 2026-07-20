@@ -3,6 +3,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -17,6 +18,7 @@ struct LoggerState {
 }
 
 static LOGGER: OnceLock<LoggerState> = OnceLock::new();
+static ENABLED: AtomicBool = AtomicBool::new(false);
 
 pub fn initialize() -> Result<(), String> {
     let app_data = std::env::var_os("APPDATA").ok_or("APPDATA 环境变量不存在")?;
@@ -27,10 +29,17 @@ pub fn initialize() -> Result<(), String> {
         directory,
         last_cleanup: Mutex::new(Instant::now()),
     });
-    info(format_args!(
-        "本地日志已启动；本次清理删除 {removed} 个过期日志"
-    ));
+    if removed != 0 {
+        eprintln!("本次启动已永久删除 {removed} 个过期 PulseHub 日志");
+    }
     Ok(())
+}
+
+pub fn set_enabled(enabled: bool) {
+    let changed = ENABLED.swap(enabled, Ordering::AcqRel) != enabled;
+    if enabled && changed {
+        info(format_args!("开发者日志已启用"));
+    }
 }
 
 pub fn info(arguments: std::fmt::Arguments<'_>) {
@@ -63,6 +72,9 @@ pub fn run_periodic_maintenance() {
 }
 
 fn write_entry(level: &str, arguments: std::fmt::Arguments<'_>) {
+    if !ENABLED.load(Ordering::Acquire) {
+        return;
+    }
     let Some(logger) = LOGGER.get() else {
         return;
     };

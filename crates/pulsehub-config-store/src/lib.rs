@@ -26,12 +26,15 @@ pub struct ConfigDocument {
 #[serde(deny_unknown_fields)]
 pub struct AgentConfig {
     pub start_with_windows: bool,
+    #[serde(default)]
+    pub developer_logging: bool,
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             start_with_windows: true,
+            developer_logging: false,
         }
     }
 }

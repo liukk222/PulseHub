@@ -200,6 +200,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    local_log::set_enabled(config.agent.developer_logging);
 
     println!(
         "PulseHub agent: selection={:?}, config_schema={}, ipc={PROTOCOL_VERSION}",
@@ -588,6 +589,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                         };
                         let result = committed.map(|revision| {
                             let current_config = repository.borrow().document().clone();
+                            local_log::set_enabled(current_config.agent.developer_logging);
                             let previous = command_snapshot
                                 .read()
                                 .unwrap_or_else(|poisoned| poisoned.into_inner())

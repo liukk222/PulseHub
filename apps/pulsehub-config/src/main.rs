@@ -93,7 +93,12 @@ fn run_gui() -> ExitCode {
 
     let save_ui = ui.as_weak();
     ui.on_save_requested(
-        move |office_dpi, cs2_dpi, base_revision, selection_mode, start_with_windows| {
+        move |office_dpi,
+              cs2_dpi,
+              base_revision,
+              selection_mode,
+              start_with_windows,
+              developer_logging| {
             if let Some(ui) = save_ui.upgrade() {
                 ui.set_busy(true);
                 ui.set_save_title("正在检查配置".into());
@@ -127,6 +132,7 @@ fn run_gui() -> ExitCode {
                     cs2_dpi_levels,
                     selection_mode.as_str(),
                     start_with_windows,
+                    developer_logging,
                 );
                 let _ = slint::invoke_from_event_loop(move || match result {
                     Ok((snapshot, config)) => {
@@ -370,6 +376,7 @@ fn apply_gui_state(
     ui.set_cs2_dpi_cycle_enabled(profile_uses_dpi_cycle(&config.profiles.cs2));
     ui.set_selection_mode(selection_mode_label(config.selection.mode).into());
     ui.set_start_with_windows(config.agent.start_with_windows);
+    ui.set_developer_logging(config.agent.developer_logging);
     ui.set_integration_status(
         match snapshot.integration_status {
             pulsehub_ipc::IntegrationStatus::Unknown => "未知",
@@ -418,6 +425,7 @@ fn save_gui_config(
     cs2_dpi_levels: [u16; 4],
     selection_mode: &str,
     start_with_windows: bool,
+    developer_logging: bool,
 ) -> Result<(AgentSnapshot, pulsehub_config_store::ConfigDocument), String> {
     use pulsehub_ipc::windows::{connect_with_retry, default_pipe_path};
 
@@ -432,6 +440,7 @@ fn save_gui_config(
     apply_mapping_selections(&mut config.profiles.cs2.button_mappings, cs2_mappings)?;
     config.selection.mode = selection_mode_from_label(selection_mode)?;
     config.agent.start_with_windows = start_with_windows;
+    config.agent.developer_logging = developer_logging;
     let draft = serde_json::to_value(&config).map_err(|error| error.to_string())?;
     let mut stream = connect_with_retry(
         default_pipe_path().map_err(|error| error.to_string())?,
