@@ -74,7 +74,7 @@ fn run_gui() -> ExitCode {
     });
 
     let save_ui = ui.as_weak();
-    ui.on_save_requested(move |office_dpi, cs2_dpi, base_revision| {
+    ui.on_save_requested(move |office_dpi, cs2_dpi, base_revision, selection_mode| {
         if let Some(ui) = save_ui.upgrade() {
             ui.set_busy(true);
             ui.set_save_title("正在检查配置".into());
@@ -96,6 +96,7 @@ fn run_gui() -> ExitCode {
                 base_revision as u64,
                 &office_mappings,
                 &cs2_mappings,
+                selection_mode.as_str(),
             );
             let _ = slint::invoke_from_event_loop(move || match result {
                 Ok((snapshot, config)) => {
@@ -243,6 +244,8 @@ fn apply_gui_state(
     ui.set_cs2_dpi(config.profiles.cs2.dpi.into());
     ui.set_office_mappings(mapping_model(&config.profiles.office.button_mappings));
     ui.set_cs2_mappings(mapping_model(&config.profiles.cs2.button_mappings));
+    ui.set_selection_mode(selection_mode_label(config.selection.mode).into());
+    ui.set_start_with_windows(config.agent.start_with_windows);
     ui.set_save_title(
         if snapshot.current_dpi == Some(snapshot.desired_dpi) {
             "已应用"
@@ -278,6 +281,7 @@ fn save_gui_config(
     base_revision: u64,
     office_mappings: &[(String, String)],
     cs2_mappings: &[(String, String)],
+    selection_mode: &str,
 ) -> Result<(AgentSnapshot, pulsehub_config_store::ConfigDocument), String> {
     use pulsehub_ipc::windows::{connect_with_retry, default_pipe_path};
 
@@ -288,6 +292,7 @@ fn save_gui_config(
     config.profiles.cs2.dpi = cs2_dpi;
     apply_mapping_selections(&mut config.profiles.office.button_mappings, office_mappings)?;
     apply_mapping_selections(&mut config.profiles.cs2.button_mappings, cs2_mappings)?;
+    config.selection.mode = selection_mode_from_label(selection_mode)?;
     let draft = serde_json::to_value(&config).map_err(|error| error.to_string())?;
     let mut stream = connect_with_retry(
         default_pipe_path().map_err(|error| error.to_string())?,
@@ -469,6 +474,23 @@ fn action_from_id(id: &str) -> Result<pulsehub_config_store::ButtonActionConfig,
         "select_all" => Ok(keyboard(0x04, 1)),
         "disabled" => Ok(ButtonActionConfig::Disabled),
         _ => Err(format!("不支持的按键动作：{id}")),
+    }
+}
+
+fn selection_mode_label(mode: pulsehub_config_store::SelectionMode) -> &'static str {
+    match mode {
+        pulsehub_config_store::SelectionMode::Auto => "自动",
+        pulsehub_config_store::SelectionMode::Office => "固定 Office",
+        pulsehub_config_store::SelectionMode::Cs2 => "固定 CS2",
+    }
+}
+
+fn selection_mode_from_label(label: &str) -> Result<pulsehub_config_store::SelectionMode, String> {
+    match label {
+        "自动" => Ok(pulsehub_config_store::SelectionMode::Auto),
+        "固定 Office" => Ok(pulsehub_config_store::SelectionMode::Office),
+        "固定 CS2" => Ok(pulsehub_config_store::SelectionMode::Cs2),
+        _ => Err(format!("不支持的环境选择模式：{label}")),
     }
 }
 
@@ -722,7 +744,8 @@ fn print_help() {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_mapping_selections, is_revision_conflict, next_action, should_prompt_before_close,
+        apply_mapping_selections, is_revision_conflict, next_action, selection_mode_from_label,
+        selection_mode_label, should_prompt_before_close,
     };
 
     #[test]
@@ -768,5 +791,20 @@ mod tests {
     fn close_only_prompts_for_dirty_drafts() {
         assert!(!should_prompt_before_close(false));
         assert!(should_prompt_before_close(true));
+    }
+
+    #[test]
+    fn selection_mode_labels_round_trip() {
+        for mode in [
+            pulsehub_config_store::SelectionMode::Auto,
+            pulsehub_config_store::SelectionMode::Office,
+            pulsehub_config_store::SelectionMode::Cs2,
+        ] {
+            assert_eq!(
+                selection_mode_from_label(selection_mode_label(mode)),
+                Ok(mode)
+            );
+        }
+        assert!(selection_mode_from_label("未知").is_err());
     }
 }
