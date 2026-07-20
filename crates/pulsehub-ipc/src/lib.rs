@@ -146,12 +146,23 @@ pub enum DeviceStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct DpiCapability {
+    pub minimum: u16,
+    pub maximum: u16,
+    pub step: Option<u16>,
+    pub selectable_values: Vec<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentSnapshot {
     pub device_status: DeviceStatus,
     pub active_environment: Environment,
     pub config_revision: u64,
     pub current_dpi: Option<u16>,
     pub desired_dpi: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dpi_capability: Option<DpiCapability>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -582,6 +593,12 @@ mod tests {
             config_revision: 3,
             current_dpi: Some(1800),
             desired_dpi: 1800,
+            dpi_capability: Some(DpiCapability {
+                minimum: 50,
+                maximum: 8000,
+                step: Some(50),
+                selectable_values: vec![100, 400, 800, 1600, 3200, 6400],
+            }),
         };
         let mut session = Session::default();
         let hello_response = dispatch_request(&mut session, &hello(), &snapshot);
@@ -602,6 +619,7 @@ mod tests {
             config_revision: 0,
             current_dpi: None,
             desired_dpi: 3200,
+            dpi_capability: None,
         };
         let request = Request::GetSnapshot {
             version: 1,

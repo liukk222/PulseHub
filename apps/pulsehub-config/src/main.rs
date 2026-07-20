@@ -8,6 +8,8 @@ use std::time::Duration;
 use pulsehub_ipc::{AgentSnapshot, PROTOCOL_VERSION, Request, Response, read_frame, write_frame};
 use pulsehub_ui::AppWindow;
 use slint::ComponentHandle;
+#[cfg(windows)]
+use slint::{ModelRc, VecModel};
 
 #[derive(Clone, Copy)]
 enum AgentAction {
@@ -157,6 +159,19 @@ fn apply_gui_state(
     );
     ui.set_desired_dpi(snapshot.desired_dpi.to_string().into());
     ui.set_revision(snapshot.config_revision.to_string().into());
+    let dpi_values = snapshot
+        .dpi_capability
+        .as_ref()
+        .map(|capability| {
+            capability
+                .selectable_values
+                .iter()
+                .copied()
+                .map(i32::from)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    ui.set_dpi_options(ModelRc::new(VecModel::from(dpi_values)));
     ui.set_office_dpi(config.profiles.office.dpi.into());
     ui.set_cs2_dpi(config.profiles.cs2.dpi.into());
     ui.set_save_title(
@@ -423,6 +438,17 @@ fn run_agent_action(action: AgentAction) -> ExitCode {
         snapshot.desired_dpi,
         snapshot.config_revision
     );
+    if let Some(capability) = &snapshot.dpi_capability {
+        println!(
+            "DPI 能力：{}–{}，步进={}，界面选项={:?}",
+            capability.minimum,
+            capability.maximum,
+            capability
+                .step
+                .map_or_else(|| "离散值".to_owned(), |step| step.to_string()),
+            capability.selectable_values
+        );
+    }
     ExitCode::SUCCESS
 }
 

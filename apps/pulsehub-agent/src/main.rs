@@ -16,7 +16,9 @@ use pulsehub_config_store::{
 };
 use pulsehub_core::Environment;
 use pulsehub_device::hidpp::{DpiWriteResult, HidppError, probe_first_g102, set_first_g102_dpi};
-use pulsehub_ipc::{AgentSnapshot, DeviceStatus, Environment as IpcEnvironment, PROTOCOL_VERSION};
+use pulsehub_ipc::{
+    AgentSnapshot, DeviceStatus, DpiCapability, Environment as IpcEnvironment, PROTOCOL_VERSION,
+};
 use pulsehub_profile::{
     EnvironmentTracker, ProcessRule, RetryBackoff, SelectionPolicy, select_environment_with_rules,
 };
@@ -335,14 +337,21 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                 Ok(applied) => {
                     tracker.observe(target.environment);
                     backoff.record_success();
-                    *foreground_snapshot
-                        .write()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = snapshot_for_target(
+                    let capability = foreground_snapshot
+                        .read()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .dpi_capability
+                        .clone();
+                    let mut current = snapshot_for_target(
                         &target,
                         repository.borrow().revision(),
                         DeviceStatus::Ready,
                         Some(applied.after),
                     );
+                    current.dpi_capability = capability;
+                    *foreground_snapshot
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = current;
                     None
                 }
                 Err(error) if error.retryable => {
@@ -379,12 +388,18 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                                         retryable: error.retryable,
                                     })
                                     .map(|applied| {
-                                        let current = snapshot_for_target(
+                                        let capability = command_snapshot
+                                            .read()
+                                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                            .dpi_capability
+                                            .clone();
+                                        let mut current = snapshot_for_target(
                                             &target,
                                             repository.borrow().revision(),
                                             DeviceStatus::Ready,
                                             Some(applied.after),
                                         );
+                                        current.dpi_capability = capability;
                                         *command_snapshot
                                             .write()
                                             .unwrap_or_else(|poisoned| poisoned.into_inner()) =
@@ -435,6 +450,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                                 config_revision: revision,
                                 current_dpi: previous.current_dpi,
                                 desired_dpi,
+                                dpi_capability: previous.dpi_capability,
                             };
                             *command_snapshot
                                 .write()
@@ -586,12 +602,14 @@ fn serve_ipc_apply_session(
             };
             match apply_target(&target) {
                 Ok(applied) => {
+                    let capability = snapshot.dpi_capability.clone();
                     snapshot = snapshot_for_target(
                         &target,
                         snapshot.config_revision,
                         DeviceStatus::Ready,
                         Some(applied.after),
                     );
+                    snapshot.dpi_capability = capability;
                     Response::success(
                         request.request_id(),
                         serde_json::to_value(&snapshot).expect("AgentSnapshot 必须可序列化"),
@@ -741,7 +759,21 @@ fn live_snapshot(config: &ConfigDocument) -> Result<AgentSnapshot, String> {
     if let Err(error) = &probe {
         eprintln!("HID++ 状态查询未完成：{error}；仍提供降级快照。");
     }
-    Ok(snapshot_for_target(&target, 0, device_status, current_dpi))
+    let mut snapshot = snapshot_for_target(&target, 0, device_status, current_dpi);
+    snapshot.dpi_capability = probe.as_ref().ok().and_then(|result| {
+        result.dpi_sensors.first().map(|sensor| DpiCapability {
+            minimum: sensor.minimum,
+            maximum: sensor.maximum,
+            step: sensor.step,
+            selectable_values: suggested_dpi_values(
+                sensor.minimum,
+                sensor.maximum,
+                sensor.step,
+                &sensor.discrete_values,
+            ),
+        })
+    });
+    Ok(snapshot)
 }
 
 #[cfg(not(windows))]
@@ -788,7 +820,26 @@ fn snapshot_for_target(
         config_revision,
         current_dpi,
         desired_dpi: target.dpi,
+        dpi_capability: None,
     }
+}
+
+fn suggested_dpi_values(
+    minimum: u16,
+    maximum: u16,
+    step: Option<u16>,
+    discrete_values: &[u16],
+) -> Vec<u16> {
+    [100_u16, 400, 800, 1600, 1800, 3200]
+        .into_iter()
+        .filter(|value| {
+            if !discrete_values.is_empty() && step.is_none() {
+                return discrete_values.contains(value);
+            }
+            (minimum..=maximum).contains(value)
+                && step.is_none_or(|step| (*value - minimum).is_multiple_of(step))
+        })
+        .collect()
 }
 
 fn run_watcher(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> ExitCode {
@@ -1041,5 +1092,17 @@ mod tests {
         assert_eq!(snapshot.config_revision, 7);
         assert_eq!(snapshot.current_dpi, Some(800));
         assert_eq!(snapshot.desired_dpi, 800);
+    }
+
+    #[test]
+    fn dpi_shortcuts_are_derived_from_continuous_capability() {
+        assert_eq!(
+            suggested_dpi_values(50, 8000, Some(50), &[50, 8000]),
+            [100, 400, 800, 1600, 1800, 3200]
+        );
+        assert_eq!(
+            suggested_dpi_values(400, 1600, Some(400), &[400, 1600]),
+            [400, 800, 1600]
+        );
     }
 }

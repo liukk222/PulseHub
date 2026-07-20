@@ -3,6 +3,7 @@ import { Theme } from "../theme.slint";
 export component ProfilePage inherits Rectangle {
     in property <string> profile-name;
     in property <int> dpi;
+    in property <[int]> dpi-options;
     in property <string> process-rule;
     in property <bool> editing-enabled: true;
     callback dpi-changed(int);
@@ -19,7 +20,7 @@ export component ProfilePage inherits Rectangle {
                 Text { text: "选项来自已识别设备能力"; color: Theme.muted; font-size: 12px; }
                 HorizontalLayout {
                     spacing: 8px;
-                    for value in [100, 800, 1800, 3200]: Rectangle {
+                    for value in root.dpi-options: Rectangle {
                         min-width: 78px; height: 40px; border-radius: 8px; border-width: 1px;
                         border-color: root.dpi == value ? Theme.primary : Theme.hairline;
                         background: root.dpi == value ? Theme.primary-soft : Theme.surface;
