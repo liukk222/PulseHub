@@ -9,7 +9,7 @@
 
 PulseHub 是一个使用 Rust 开发的轻量鼠标配置程序。第一阶段面向 Logitech G102 LIGHTSYNC，提供真实硬件 DPI 设置、鼠标按键分配，以及“办公”和“CS2”两套配置的自动切换。
 
-当前工作区已初始化 Cargo Workspace，并包含领域模型、设备接口、配置切换、配置存储、IPC 与三个可执行入口；Windows HID 枚举、HID++ 功能发现、DPI 读写和板载配置只读解析已经通过 G102 实机验证。IPC v1 的请求、响应、事件 DTO、版本协商状态机和长度前缀帧编解码已经实现，Named Pipe 传输与 ACL 尚未实现。Win32 托盘、Slint GUI 以及通用按键写入仍未实现。因此，本文同时记录已验证实现与后续编码基线；未明确标为实机验证的性能数字和协议细节仍属于待验证目标。
+当前工作区已初始化 Cargo Workspace，并包含领域模型、设备接口、配置切换、配置存储、IPC 与三个可执行入口；Windows HID 枚举、HID++ 功能发现、DPI 读写和板载配置只读解析已经通过 G102 实机验证。IPC v1 的 DTO、版本协商、长度前缀帧和 Windows Named Pipe 字节流传输已经实现。当前管道使用受保护的 owner-only DACL 并拒绝远程客户端，精确 logon SID 命名与代理常驻监听尚未接入。Win32 托盘、Slint GUI 以及通用按键写入仍未实现。因此，本文同时记录已验证实现与后续编码基线；未明确标为实机验证的性能数字和协议细节仍属于待验证目标。
 
 本文使用以下状态词：
 
@@ -789,6 +789,12 @@ profile format `0x04` 的槽位顺序、Keyboard HID Usage 和左 Ctrl modifier 
 
 不能依赖 Named Pipe 默认 DACL，因为默认描述符可能向 Everyone/匿名主体授予读取权限。
 
+当前传输 POC 使用 `interprocess 2.4.2` 的安全封装创建字节流管道，显式设置受保护的
+owner-only DACL `D:P(A;;GA;;;OW)`、禁止句柄继承，并保持 `accept_remote = false`（映射到
+`PIPE_REJECT_REMOTE_CLIENTS`）。测试管道已经完成真实 Windows 内核往返。生产接入前仍须把
+固定 POC 名称 `PulseHub.Agent.v1` 改为包含当前 logon SID 的名称，并用跨会话测试确认隔离性；
+owner-only DACL 不能替代该命名要求。
+
 ### 10.2 帧格式
 
 使用字节流管道和显式长度前缀：
@@ -810,7 +816,8 @@ payload_length bytes UTF-8 JSON
 当前 `pulsehub-ipc` 已实现上述纯协议层：所有 DTO 使用严格未知字段拒绝，读取端在分配 payload
 前检查长度上限，`Session` 在成功处理 `hello` 前拒绝其他请求。单元测试覆盖正常往返、截断帧、
 超长帧、非法 UTF-8/JSON、未知字段/消息类型、版本不匹配以及响应信封不变量。Windows Named
-Pipe 监听、当前 logon SID ACL 和客户端连接管理是下一实现单元。
+Pipe 帧传输和单连接会话已实现；代理常驻 accept 循环、并发客户端上限、当前 logon SID
+命名和关机协调是下一实现单元。
 
 首次连接先完成版本协商：
 

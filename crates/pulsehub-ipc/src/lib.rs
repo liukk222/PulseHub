@@ -7,6 +7,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[cfg(windows)]
+pub mod windows;
+
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
 pub const MAX_REQUEST_ID_BYTES: usize = 128;
@@ -318,6 +321,63 @@ impl Session {
     }
 }
 
+pub fn dispatch_request(
+    session: &mut Session,
+    request: &Request,
+    snapshot: &AgentSnapshot,
+) -> Response {
+    let request_id = request.request_id().to_owned();
+    if let Err(error) = session.accept(request) {
+        return Response::failure(
+            request_id,
+            ErrorBody {
+                code: match error {
+                    ProtocolError::UnsupportedVersion { .. } => ErrorCode::Version,
+                    _ => ErrorCode::InvalidRequest,
+                },
+                message: error.to_string(),
+                retryable: false,
+            },
+        );
+    }
+    match request {
+        Request::Hello { .. } => Response::success(
+            request_id,
+            serde_json::json!({"selected_version": PROTOCOL_VERSION}),
+        ),
+        Request::GetSnapshot { .. } => match serde_json::to_value(snapshot) {
+            Ok(data) => Response::success(request_id, data),
+            Err(error) => Response::failure(
+                request_id,
+                ErrorBody {
+                    code: ErrorCode::Internal,
+                    message: error.to_string(),
+                    retryable: false,
+                },
+            ),
+        },
+        _ => Response::failure(
+            request_id,
+            ErrorBody {
+                code: ErrorCode::InvalidRequest,
+                message: format!("{} 尚未由代理实现", request.wire_name()),
+                retryable: false,
+            },
+        ),
+    }
+}
+
+pub fn serve_next<T: Read + Write>(
+    stream: &mut T,
+    session: &mut Session,
+    snapshot: &AgentSnapshot,
+) -> Result<(), FrameError> {
+    let request = read_request(stream)?;
+    let response = dispatch_request(session, &request, snapshot);
+    response.validate().map_err(FrameError::Protocol)?;
+    write_frame(stream, &response)
+}
+
 pub fn write_frame(writer: &mut impl Write, message: &impl Serialize) -> Result<(), FrameError> {
     let payload =
         serde_json::to_vec(message).map_err(|error| FrameError::Json(error.to_string()))?;
@@ -495,5 +555,43 @@ mod tests {
             write_frame(&mut Vec::new(), &huge),
             Err(FrameError::PayloadTooLarge { .. })
         ));
+    }
+
+    #[test]
+    fn dispatcher_negotiates_and_returns_snapshot() {
+        let snapshot = AgentSnapshot {
+            device_status: DeviceStatus::Ready,
+            active_environment: Environment::Office,
+            config_revision: 3,
+            current_dpi: Some(1800),
+            desired_dpi: 1800,
+        };
+        let mut session = Session::default();
+        let hello_response = dispatch_request(&mut session, &hello(), &snapshot);
+        assert!(hello_response.ok);
+        let request = Request::GetSnapshot {
+            version: 1,
+            request_id: "snapshot-1".to_owned(),
+        };
+        let response = dispatch_request(&mut session, &request, &snapshot);
+        assert_eq!(response.data, Some(serde_json::to_value(snapshot).unwrap()));
+    }
+
+    #[test]
+    fn dispatcher_rejects_snapshot_before_hello() {
+        let snapshot = AgentSnapshot {
+            device_status: DeviceStatus::Unknown,
+            active_environment: Environment::Office,
+            config_revision: 0,
+            current_dpi: None,
+            desired_dpi: 3200,
+        };
+        let request = Request::GetSnapshot {
+            version: 1,
+            request_id: "too-early".to_owned(),
+        };
+        let response = dispatch_request(&mut Session::default(), &request, &snapshot);
+        assert!(!response.ok);
+        assert_eq!(response.error.unwrap().code, ErrorCode::InvalidRequest);
     }
 }
