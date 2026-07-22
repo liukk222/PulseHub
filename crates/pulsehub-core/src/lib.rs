@@ -4,6 +4,7 @@
 pub enum Environment {
     Office,
     Cs2,
+    Custom,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

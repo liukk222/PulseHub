@@ -6,3 +6,14 @@
 #![allow(unsafe_code)]
 
 slint::include_modules!();
+
+/// 请求 Windows 回收当前进程不再活跃的工作集页面。
+///
+/// 托盘态不持有 GUI 窗口；调用后只影响物理工作集，后续需要的页面仍可按需调入。
+#[cfg(windows)]
+pub fn trim_current_process_working_set() {
+    unsafe {
+        let process = windows_sys::Win32::System::Threading::GetCurrentProcess();
+        windows_sys::Win32::System::ProcessStatus::EmptyWorkingSet(process);
+    }
+}

@@ -1,4 +1,5 @@
 import { Theme } from "../theme.slint";
+import { I18n } from "../i18n.slint";
 
 export component DeviceCard inherits Rectangle {
     in property <string> status-text;
@@ -17,8 +18,8 @@ export component DeviceCard inherits Rectangle {
         Text { text: root.status-text; color: Theme.success; font-size: 14px; }
         HorizontalLayout {
             spacing: 32px;
-            VerticalLayout { Text { text: "当前环境"; color: Theme.muted; font-size: 12px; } Text { text: root.environment-text; color: Theme.ink; font-size: 20px; font-weight: 600; } }
-            VerticalLayout { Text { text: "当前 DPI"; color: Theme.muted; font-size: 12px; } Text { text: root.current-dpi; color: Theme.ink; font-size: 20px; font-weight: 600; } }
+            VerticalLayout { Text { text: I18n.english ? "Active profile" : "当前环境"; color: Theme.muted; font-size: 12px; } Text { text: root.environment-text; color: Theme.ink; font-size: 20px; font-weight: 600; } }
+            VerticalLayout { Text { text: I18n.english ? "Current DPI" : "当前 DPI"; color: Theme.muted; font-size: 12px; } Text { text: root.current-dpi; color: Theme.ink; font-size: 20px; font-weight: 600; } }
         }
     }
 }

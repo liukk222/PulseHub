@@ -13,6 +13,7 @@ const ROOT_FEATURE_INDEX: u8 = 0x00;
 const FEATURE_SET_ID: u16 = 0x0001;
 const ADJUSTABLE_DPI_ID: u16 = 0x2201;
 const ONBOARD_PROFILES_ID: u16 = 0x8100;
+const RGB_EFFECTS_ID: u16 = 0x8071;
 const REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_FEATURE_COUNT: u8 = 64;
 const MAX_TRACE_FRAMES: usize = 256;
@@ -157,6 +158,7 @@ pub struct OnboardWriteResult {
     pub profile_sector: u16,
     pub changed_buttons: Vec<usize>,
     pub dpi_changed: bool,
+    pub report_rate_changed: bool,
     pub verified: bool,
 }
 
@@ -164,6 +166,13 @@ pub struct OnboardWriteResult {
 pub struct OnboardModeWriteResult {
     pub before: OnboardMode,
     pub after: OnboardMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LightingOffResult {
+    pub cluster_count: u8,
+    pub already_off: bool,
+    pub verified_power_off: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -296,6 +305,61 @@ pub fn set_first_g102_dpi(
     })
 }
 
+/// 将 G102 LIGHTSYNC 的所有 RGB cluster 固定为关闭，并回读确认 RGB 电源模式。
+#[cfg(windows)]
+pub fn ensure_first_g102_lighting_off(
+    protocol_trace: bool,
+) -> Result<LightingOffResult, HidppError> {
+    let mut transport = WindowsHidppTransport::open(protocol_trace)?;
+    if transport.product_id != 0xc092 || transport.release_number != 0x5200 {
+        return Err(HidppError::InvalidResponse(format!(
+            "拒绝灯光写入：仅验证过 046d:c092 release=5200，当前为 046d:{:04x} release={:04x}",
+            transport.product_id, transport.release_number
+        )));
+    }
+    let feature = get_feature(&mut transport, RGB_EFFECTS_ID)?;
+    if feature.index == 0 {
+        return Err(HidppError::InvalidResponse(
+            "设备未公开 RGB_EFFECTS (0x8071)".to_owned(),
+        ));
+    }
+    let power = request(&mut transport, feature.index, 8, [0, 0, 0])?;
+    let current_mode = parameters(&power, 2)?[1];
+    let info = request(&mut transport, feature.index, 0, [0xff, 0xff, 0])?;
+    let cluster_count = parameters(&info, 3)?[2];
+    if current_mode == 3 {
+        return Ok(LightingOffResult {
+            cluster_count,
+            already_off: true,
+            verified_power_off: true,
+        });
+    }
+
+    // 取得全部 cluster 和电源模式的软件控制权，不订阅灯光事件。
+    request(&mut transport, feature.index, 5, [1, 0x03, 0])?;
+    for cluster in 0..cluster_count {
+        for power_target in [0_u8, 1] {
+            let mut parameters = [0_u8; 16];
+            parameters[0] = cluster;
+            parameters[1] = 0; // effect index 0 是该设备公布的 Off effect
+            parameters[12] = 0x03 | (power_target << 2); // RAM + EEPROM
+            request_long(&mut transport, feature.index, 1, parameters)?;
+        }
+    }
+    request(&mut transport, feature.index, 8, [1, 3, 0])?;
+    let verified = request(&mut transport, feature.index, 8, [0, 0, 0])?;
+    if parameters(&verified, 2)?[1] != 3 {
+        return Err(HidppError::InvalidResponse(
+            "灯光关闭后回读的 RGB 电源模式不是 PowerOff".to_owned(),
+        ));
+    }
+    Ok(LightingOffResult {
+        cluster_count,
+        already_off: false,
+        verified_power_off: true,
+    })
+}
+
 #[cfg(windows)]
 pub fn apply_first_g102_office_buttons(
     protocol_trace: bool,
@@ -315,7 +379,7 @@ pub fn apply_first_g102_button_actions(
             transport.product_id, transport.release_number
         )));
     }
-    apply_profile_settings(&mut transport, actions, None)
+    apply_profile_settings(&mut transport, actions, None, None)
 }
 
 #[cfg(windows)]
@@ -323,6 +387,7 @@ pub fn apply_first_g102_profile(
     actions: &[OnboardButtonAction; 6],
     dpi: u16,
     dpi_levels: Option<&[u16; 4]>,
+    report_rate_hz: u16,
     protocol_trace: bool,
 ) -> Result<OnboardWriteResult, HidppError> {
     let mut transport = WindowsHidppTransport::open(protocol_trace)?;
@@ -335,7 +400,7 @@ pub fn apply_first_g102_profile(
     let dpi = dpi_levels.map_or(ProfileDpiSettings::Single(dpi), |levels| {
         ProfileDpiSettings::Levels { dpi, levels }
     });
-    apply_profile_settings(&mut transport, actions, Some(dpi))
+    apply_profile_settings(&mut transport, actions, Some(dpi), Some(report_rate_hz))
 }
 
 #[cfg(windows)]
@@ -406,6 +471,7 @@ pub fn apply_first_g102_profile(
     _actions: &[OnboardButtonAction; 6],
     _dpi: u16,
     _dpi_levels: Option<&[u16; 4]>,
+    _report_rate_hz: u16,
     _protocol_trace: bool,
 ) -> Result<OnboardWriteResult, HidppError> {
     Err(HidppError::PlatformUnsupported)
@@ -532,6 +598,7 @@ fn apply_profile_settings(
     transport: &mut impl Transport,
     actions: &[OnboardButtonAction; 6],
     dpi: Option<ProfileDpiSettings<'_>>,
+    report_rate_hz: Option<u16>,
 ) -> Result<OnboardWriteResult, HidppError> {
     let feature = get_feature(transport, ONBOARD_PROFILES_ID)?;
     if feature.index == 0 {
@@ -566,13 +633,14 @@ fn apply_profile_settings(
     }
 
     let original = read_onboard_sector(transport, feature.index, profile_sector, info.sector_size)?;
-    let (desired, changed_buttons, dpi_changed) =
-        build_profile_sector(&original, info.button_count, actions, dpi)?;
-    if changed_buttons.is_empty() && !dpi_changed {
+    let (desired, changed_buttons, dpi_changed, report_rate_changed) =
+        build_profile_sector(&original, info.button_count, actions, dpi, report_rate_hz)?;
+    if changed_buttons.is_empty() && !dpi_changed && !report_rate_changed {
         return Ok(OnboardWriteResult {
             profile_sector,
             changed_buttons,
             dpi_changed,
+            report_rate_changed,
             verified: true,
         });
     }
@@ -626,6 +694,7 @@ fn apply_profile_settings(
         profile_sector,
         changed_buttons,
         dpi_changed,
+        report_rate_changed,
         verified: true,
     })
 }
@@ -635,8 +704,13 @@ fn build_office_profile_sector(
     original: &[u8],
     button_count: u8,
 ) -> Result<(Vec<u8>, Vec<usize>), HidppError> {
-    let (sector, buttons, _) =
-        build_profile_sector(original, button_count, &g102_office_button_actions(), None)?;
+    let (sector, buttons, _, _) = build_profile_sector(
+        original,
+        button_count,
+        &g102_office_button_actions(),
+        None,
+        None,
+    )?;
     Ok((sector, buttons))
 }
 
@@ -645,7 +719,8 @@ fn build_profile_sector(
     button_count: u8,
     actions: &[OnboardButtonAction; 6],
     dpi: Option<ProfileDpiSettings<'_>>,
-) -> Result<(Vec<u8>, Vec<usize>, bool), HidppError> {
+    report_rate_hz: Option<u16>,
+) -> Result<(Vec<u8>, Vec<usize>, bool, bool), HidppError> {
     validate_sector_crc(original)?;
     if button_count != 6 || original.len() != 255 {
         return Err(HidppError::InvalidResponse(
@@ -653,6 +728,24 @@ fn build_profile_sector(
         ));
     }
     let mut desired = original.to_vec();
+    let mut report_rate_changed = false;
+    if let Some(report_rate_hz) = report_rate_hz {
+        let divisor = match report_rate_hz {
+            1000 => 1,
+            500 => 2,
+            250 => 4,
+            125 => 8,
+            value => {
+                return Err(HidppError::InvalidResponse(format!(
+                    "不支持的回报率 {value} Hz；仅允许 1000、500、250、125 Hz"
+                )));
+            }
+        };
+        if desired[0] != divisor {
+            desired[0] = divisor;
+            report_rate_changed = true;
+        }
+    }
     let mut dpi_changed = false;
     if let Some(ProfileDpiSettings::Levels { dpi, levels }) = dpi {
         let default_index = levels
@@ -711,7 +804,7 @@ fn build_profile_sector(
     let payload_length = desired.len() - 2;
     let crc = crc_ccitt(&desired[..payload_length]);
     desired[payload_length..].copy_from_slice(&crc.to_be_bytes());
-    Ok((desired, changed_buttons, dpi_changed))
+    Ok((desired, changed_buttons, dpi_changed, report_rate_changed))
 }
 
 fn write_onboard_sector(
@@ -1601,7 +1694,7 @@ mod tests {
         let crc = crc_ccitt(&original[..253]);
         original[253..].copy_from_slice(&crc.to_be_bytes());
 
-        let (desired, changed_buttons, dpi_changed) = build_profile_sector(
+        let (desired, changed_buttons, dpi_changed, report_rate_changed) = build_profile_sector(
             &original,
             6,
             &g102_office_button_actions(),
@@ -1609,10 +1702,12 @@ mod tests {
                 dpi: 3200,
                 levels: &[800, 1600, 2400, 3200],
             }),
+            Some(500),
         )
         .unwrap();
 
         assert!(dpi_changed);
+        assert!(report_rate_changed);
         assert!(changed_buttons.is_empty());
         assert_eq!(desired[1], 0);
         assert_eq!(

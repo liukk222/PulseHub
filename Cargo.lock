@@ -3997,6 +3997,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pollster"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
+
+[[package]]
 name = "polycool"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4134,8 +4140,10 @@ dependencies = [
  "pulsehub-device",
  "pulsehub-ipc",
  "pulsehub-profile",
+ "pulsehub-ui",
  "serde_json",
  "single-instance",
+ "slint",
  "win_event_hook",
 ]
 
@@ -4147,7 +4155,9 @@ dependencies = [
  "pulsehub-core",
  "pulsehub-ipc",
  "pulsehub-ui",
+ "rfd",
  "serde_json",
+ "single-instance",
  "slint",
 ]
 
@@ -4206,6 +4216,7 @@ version = "0.1.0"
 dependencies = [
  "slint",
  "slint-build",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4505,6 +4516,33 @@ dependencies = [
  "tiny-skia 0.12.0",
  "usvg",
  "zune-jpeg",
+]
+
+[[package]]
+name = "rfd"
+version = "0.17.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20dafead71c16a34e1ff357ddefc8afc11e7d51d6d2b9fbd07eaa48e3e540220"
+dependencies = [
+ "block2 0.6.2",
+ "dispatch2",
+ "js-sys",
+ "libc",
+ "log",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "percent-encoding",
+ "pollster",
+ "raw-window-handle",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "web-sys",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

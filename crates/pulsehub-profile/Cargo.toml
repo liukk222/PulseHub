@@ -11,4 +11,3 @@ pulsehub-core = { path = "../pulsehub-core" }
 
 [lints]
 workspace = true
-

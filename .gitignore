@@ -3,6 +3,8 @@
 *.pdb
 *.exe
 *.dll
+installer/build/
+installer/output/
 .idea/
 .vscode/
 

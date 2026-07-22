@@ -1,0 +1,50 @@
+PulseHub 安装与使用协议 / PulseHub Installation and Use Agreement
+版本 / Version: 2026-07-23
+
+请完整阅读本协议。只有在您理解并同意以下全部条款后，才能安装 PulseHub。
+
+1. 软件用途与风险
+PulseHub 是面向 Logitech G102 LIGHTSYNC 的独立第三方配置工具，会读取设备状态，并可向鼠标写入 DPI、回报率、按键映射、灯光关闭及退出配置。硬件协议及操作系统行为可能因设备版本、固件、驱动程序或系统更新而变化。使用本软件可能造成配置丢失、设备暂时不可用、数据损失、系统异常、硬件损坏、业务中断或其他直接或间接经济损失。
+
+2. 授权安装
+执行安装的人声明并保证：其是本计算机和相关设备的所有者，或已获得所有者明确授权。不得在机主不知情或未授权的情况下，由本人或他人代为安装。违反本条产生的一切责任、索赔和损失由实际安装者及相关责任人承担；本协议不声称约束未同意本协议的机主或其他第三人。
+
+3. 使用者责任
+您应在安装和使用前备份重要数据、退出可能争用设备的配置软件，并确认设备型号和操作结果。您自行决定是否执行硬件写入，并承担安装、使用、误用、转交他人使用或允许他人操作本软件产生的风险与后果。
+
+4. 无保证
+本软件按“现状”和“可用状态”提供，不提供任何明示或默示保证，包括但不限于适销性、特定用途适用性、无侵权、持续可用、无错误或对任一设备/固件版本兼容的保证。
+
+5. 责任限制
+在适用法律允许的最大范围内，开发者、贡献者及发布者不对因安装或使用本软件导致的计算机系统、物理硬件、数据、收入、利润、业务机会或其他经济损失承担责任，无论损失源于合同、侵权、过失、严格责任或其他法律理论，也无论是否已被告知损失可能发生。任何依法不得排除或限制的责任，仍依适用法律处理。
+
+6. 第三方关系与协议研究
+PulseHub 与 Logitech 无隶属、授权或背书关系。设备协议可能变化，Logitech 未向 PulseHub 作出稳定性承诺。安装包内的 THIRD_PARTY_NOTICES.txt 包含兼容性研究与第三方项目说明，是本协议的一部分。
+
+7. 接受
+点击“我接受协议”并继续安装，表示实际安装者已阅读、理解并同意本协议，并确认已取得安装和操作本机及相关设备所需的授权。
+
+-----------------------------------------------------------------------
+
+Please read this agreement in full. You may install PulseHub only after you understand and accept all terms below.
+
+1. Purpose and risk
+PulseHub is an independent third-party configuration tool for the Logitech G102 LIGHTSYNC. It reads device state and may write DPI, report rate, button mappings, lighting-off settings, and exit settings to the mouse. Hardware protocols and operating-system behavior may change with device revisions, firmware, drivers, or system updates. Use may result in lost settings, temporary device unavailability, data loss, system malfunction, hardware damage, business interruption, or other direct or indirect economic loss.
+
+2. Authority to install
+The person performing the installation represents and warrants that they own the computer and related devices or have the owner's express authorization. The software must not be installed by any person on a physical machine without the owner's knowledge or authorization. Any liability, claim, or loss arising from a breach of this clause is borne by the actual installer and other responsible persons. This agreement does not purport to bind an owner or third party who did not consent to it.
+
+3. User responsibility
+Before installation or use, you should back up important data, close configuration software that may compete for the device, and verify the device model and operation results. You decide whether to perform hardware writes and assume the risks and consequences of installation, use, misuse, transfer to another user, or permitting another person to operate the software.
+
+4. No warranty
+The software is provided “as is” and “as available,” without express or implied warranties, including merchantability, fitness for a particular purpose, non-infringement, continuous availability, error-free operation, or compatibility with any device or firmware revision.
+
+5. Limitation of liability
+To the maximum extent permitted by applicable law, the developers, contributors, and distributors are not liable for damage to computer systems, physical hardware, data, revenue, profits, business opportunities, or any other economic loss arising from installation or use, whether based on contract, tort, negligence, strict liability, or any other legal theory, even if advised that such loss may occur. Liability that cannot lawfully be excluded or limited remains governed by applicable law.
+
+6. Third-party relationship and protocol research
+PulseHub is not affiliated with, authorized by, or endorsed by Logitech. Device protocols may change, and Logitech has made no stability commitment to PulseHub. THIRD_PARTY_NOTICES.txt, included with the installer, describes compatibility research and third-party projects and forms part of this agreement.
+
+7. Acceptance
+By selecting “I accept the agreement” and continuing, the actual installer confirms that they have read, understood, and accepted this agreement and have the authority required to install and operate the software on this computer and its related devices.
