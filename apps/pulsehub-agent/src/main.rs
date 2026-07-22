@@ -55,10 +55,14 @@ struct EnvironmentTarget {
 struct ApplyFailure {
     message: String,
     retryable: bool,
+    device_disconnected: bool,
 }
 
 const ENVIRONMENT_STABLE_FOR: Duration = Duration::from_secs(1);
 const PROFILE_APPLY_COOLDOWN: Duration = Duration::from_secs(5);
+const SHUTDOWN_DEVICE_WAIT: Duration = Duration::from_secs(10);
+const SHUTDOWN_DEVICE_RETRY: Duration = Duration::from_millis(250);
+const SHUTDOWN_MAX_ATTEMPTS: u8 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SwitchDecision {
@@ -145,6 +149,10 @@ struct CommandFailure {
 #[cfg(windows)]
 enum DeviceCommand {
     ApplyNow {
+        reply: std::sync::mpsc::SyncSender<Result<serde_json::Value, CommandFailure>>,
+    },
+    Shutdown {
+        force: bool,
         reply: std::sync::mpsc::SyncSender<Result<serde_json::Value, CommandFailure>>,
     },
     ValidateDraft {
@@ -311,14 +319,18 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                                 .clone()
                         },
                         |request, _| {
-                            let reply_timeout = if matches!(request, Request::ApplyNow { .. }) {
-                                Duration::from_secs(15)
-                            } else {
-                                Duration::from_secs(5)
+                            let reply_timeout = match request {
+                                Request::Shutdown { .. } => Duration::from_secs(30),
+                                Request::ApplyNow { .. } => Duration::from_secs(15),
+                                _ => Duration::from_secs(5),
                             };
                             let (reply, receiver) = mpsc::sync_channel(1);
                             let command = match request {
                                 Request::ApplyNow { .. } => DeviceCommand::ApplyNow { reply },
+                                Request::Shutdown { force, .. } => DeviceCommand::Shutdown {
+                                    force: *force,
+                                    reply,
+                                },
                                 Request::ValidateDraft { draft, .. } => {
                                     DeviceCommand::ValidateDraft {
                                         draft: draft.clone(),
@@ -563,6 +575,61 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                             });
                         let _ = reply.send(result);
                     }
+                    DeviceCommand::Shutdown { force, reply } => {
+                        if force {
+                            local_log::audit(format_args!("用户确认仍然退出；跳过鼠标安全还原"));
+                            stopping.store(true, Ordering::Release);
+                            let _ = reply.send(Ok(serde_json::json!({
+                                "shutdown": true,
+                                "restored": false,
+                                "forced": true
+                            })));
+                            break;
+                        }
+
+                        local_log::audit(format_args!(
+                            "开始安全退出：目标 DPI=1600，六个按键恢复原生功能"
+                        ));
+                        match apply_safe_shutdown() {
+                            Ok(applied) => {
+                                local_log::audit(format_args!(
+                                    "安全退出还原并回读成功：DPI={}，六个按键均为原生功能",
+                                    applied.after
+                                ));
+                                stopping.store(true, Ordering::Release);
+                                let _ = reply.send(Ok(serde_json::json!({
+                                    "shutdown": true,
+                                    "restored": true,
+                                    "current_dpi": applied.after
+                                })));
+                                break;
+                            }
+                            Err(error) if error.device_disconnected => {
+                                local_log::audit(format_args!(
+                                    "安全退出时设备未连接，无法恢复；代理将在有界尝试后退出：{}",
+                                    error.message
+                                ));
+                                stopping.store(true, Ordering::Release);
+                                let _ = reply.send(Ok(serde_json::json!({
+                                    "shutdown": true,
+                                    "restored": false,
+                                    "device_connected": false
+                                })));
+                                break;
+                            }
+                            Err(error) => {
+                                local_log::audit(format_args!(
+                                    "安全退出还原失败，等待用户重试或确认仍然退出：{}",
+                                    error.message
+                                ));
+                                let _ = reply.send(Err(CommandFailure {
+                                    code: ErrorCode::Internal,
+                                    message: error.message,
+                                    retryable: true,
+                                }));
+                            }
+                        }
+                    }
                     DeviceCommand::ValidateDraft { draft, reply } => {
                         let result = repository
                             .borrow()
@@ -670,6 +737,9 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                         let _ = reply.send(result);
                     }
                 }
+            }
+            if stopping.load(Ordering::Acquire) {
+                return false;
             }
             if last_dpi_poll.elapsed() >= Duration::from_millis(500) {
                 last_dpi_poll = Instant::now();
@@ -1225,6 +1295,52 @@ fn resolve_target(config: &ConfigDocument) -> Result<EnvironmentTarget, String> 
     })
 }
 
+fn safe_shutdown_target() -> EnvironmentTarget {
+    EnvironmentTarget {
+        executable_name: "PulseHub shutdown".to_owned(),
+        process_id: 0,
+        environment: Environment::Office,
+        dpi: 1600,
+        button_actions: [
+            mouse_button_action(1),
+            mouse_button_action(2),
+            mouse_button_action(3),
+            mouse_button_action(4),
+            mouse_button_action(5),
+            OnboardButtonAction::Special {
+                code: 0x05,
+                profile: 0,
+            },
+        ],
+        dpi_levels: [800, 1600, 2400, 3200],
+    }
+}
+
+fn apply_safe_shutdown() -> Result<DpiWriteResult, ApplyFailure> {
+    let target = safe_shutdown_target();
+    let deadline = Instant::now() + SHUTDOWN_DEVICE_WAIT;
+    let mut attempt = 0_u8;
+    loop {
+        attempt += 1;
+        match apply_target_full(&target) {
+            Err(error)
+                if (error.device_disconnected || error.retryable)
+                    && attempt < SHUTDOWN_MAX_ATTEMPTS
+                    && Instant::now() < deadline =>
+            {
+                local_log::audit(format_args!(
+                    "安全退出第 {attempt} 次还原暂时失败，将进行有限重试：{}",
+                    error.message
+                ));
+                std::thread::sleep(
+                    SHUTDOWN_DEVICE_RETRY.min(deadline.saturating_duration_since(Instant::now())),
+                );
+            }
+            result => return result,
+        }
+    }
+}
+
 fn button_actions_for_profile(profile: &ProfileConfig) -> Result<[OnboardButtonAction; 6], String> {
     const CONTROLS: [&str; 6] = [
         "g102:left",
@@ -1338,7 +1454,12 @@ fn apply_target_dpi(target: &EnvironmentTarget) -> Result<DpiWriteResult, ApplyF
             );
             let message = format!("运行态 DPI 应用失败：{error}");
             local_log::error(format_args!("{message}"));
-            Err(ApplyFailure { message, retryable })
+            let device_disconnected = matches!(error, HidppError::InterfaceNotFound);
+            Err(ApplyFailure {
+                message,
+                retryable,
+                device_disconnected,
+            })
         }
     }
 }
@@ -1382,6 +1503,7 @@ fn apply_target_full(target: &EnvironmentTarget) -> Result<DpiWriteResult, Apply
 }
 
 fn hidpp_apply_failure(context: &str, error: HidppError) -> ApplyFailure {
+    let device_disconnected = matches!(error, HidppError::InterfaceNotFound);
     let retryable = !matches!(
         error,
         HidppError::PlatformUnsupported
@@ -1390,7 +1512,11 @@ fn hidpp_apply_failure(context: &str, error: HidppError) -> ApplyFailure {
     );
     let message = format!("{context}：{error}");
     local_log::error(format_args!("{message}"));
-    ApplyFailure { message, retryable }
+    ApplyFailure {
+        message,
+        retryable,
+        device_disconnected,
+    }
 }
 
 fn selected_environment(config: &ConfigDocument, executable_name: Option<&str>) -> Environment {
@@ -1535,6 +1661,26 @@ mod tests {
         assert_eq!(actions[3], mouse_button_action(4));
         assert_eq!(
             actions[5],
+            OnboardButtonAction::Special {
+                code: 0x05,
+                profile: 0
+            }
+        );
+    }
+
+    #[test]
+    fn safe_shutdown_target_restores_native_controls() {
+        let target = safe_shutdown_target();
+
+        assert_eq!(target.dpi, 1600);
+        assert_eq!(target.dpi_levels, [800, 1600, 2400, 3200]);
+        assert_eq!(target.button_actions[0], mouse_button_action(1));
+        assert_eq!(target.button_actions[1], mouse_button_action(2));
+        assert_eq!(target.button_actions[2], mouse_button_action(3));
+        assert_eq!(target.button_actions[3], mouse_button_action(4));
+        assert_eq!(target.button_actions[4], mouse_button_action(5));
+        assert_eq!(
+            target.button_actions[5],
             OnboardButtonAction::Special {
                 code: 0x05,
                 profile: 0

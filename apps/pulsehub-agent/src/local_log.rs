@@ -50,6 +50,11 @@ pub fn error(arguments: std::fmt::Arguments<'_>) {
     write_entry("ERROR", arguments);
 }
 
+/// 无论开发者日志开关如何，都记录涉及设备恢复和进程退出的审计事件。
+pub fn audit(arguments: std::fmt::Arguments<'_>) {
+    write_entry_inner("AUDIT", arguments, true);
+}
+
 pub fn run_periodic_maintenance() {
     let Some(logger) = LOGGER.get() else {
         return;
@@ -72,7 +77,11 @@ pub fn run_periodic_maintenance() {
 }
 
 fn write_entry(level: &str, arguments: std::fmt::Arguments<'_>) {
-    if !ENABLED.load(Ordering::Acquire) {
+    write_entry_inner(level, arguments, false);
+}
+
+fn write_entry_inner(level: &str, arguments: std::fmt::Arguments<'_>, force: bool) {
+    if !force && !ENABLED.load(Ordering::Acquire) {
         return;
     }
     let Some(logger) = LOGGER.get() else {

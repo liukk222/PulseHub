@@ -27,6 +27,10 @@ export component AppWindow inherits Window {
     in-out property <bool> busy: false;
     in-out property <bool> close-dialog-visible: false;
     in-out property <bool> close-after-save: false;
+    in-out property <bool> quit-after-close: false;
+    in-out property <bool> shutdown-dialog-visible: false;
+    in-out property <string> shutdown-title: "正在安全退出";
+    in-out property <string> shutdown-detail: "正在还原鼠标，请勿断开设备。";
     in-out property <bool> mapping-editor-visible: false;
     in-out property <bool> mapping-editor-office: true;
     in-out property <int> mapping-editor-index: -1;
@@ -77,6 +81,8 @@ export component AppWindow inherits Window {
     callback dpi-level-requested(bool, int, string);
     callback discard-and-close-requested();
     callback retry-apply-requested();
+    callback retry-shutdown-requested();
+    callback force-shutdown-requested();
 
     VerticalLayout {
         spacing: 0px;
@@ -182,10 +188,29 @@ export component AppWindow inherits Window {
                 Text { text: "Office 和 CS2 共用一个待提交草稿。关闭前可以保存，也可以明确放弃本次更改。"; color: Theme.body; font-size: 14px; wrap: word-wrap; }
                 Rectangle { vertical-stretch: 1; background: transparent; }
                 HorizontalLayout { spacing: 10px;
-                    Button { text: "取消"; clicked => { root.close-dialog-visible = false; } }
+                    Button { text: "取消"; clicked => { root.close-dialog-visible = false; root.quit-after-close = false; } }
                     Rectangle { horizontal-stretch: 1; background: transparent; }
                     Button { text: "放弃更改"; clicked => { root.close-dialog-visible = false; root.discard-and-close-requested(); } }
                     Button { text: "保存并关闭"; primary: true; enabled: !root.busy; clicked => { root.close-dialog-visible = false; root.close-after-save = true; root.save-requested(root.office-dpi, root.cs2-dpi, root.base-revision, root.selection-mode, root.start-with-windows, root.developer-logging); } }
+                }
+            }
+        }
+    }
+    if root.shutdown-dialog-visible: Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: parent.height;
+        background: Theme.overlay;
+        Rectangle {
+            width: 500px; height: 250px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px;
+            VerticalLayout { padding: 24px; spacing: 16px;
+                Text { text: root.shutdown-title; color: Theme.ink; font-size: 18px; font-weight: 600; }
+                Text { text: root.shutdown-detail; color: Theme.body; font-size: 14px; wrap: word-wrap; }
+                Rectangle { vertical-stretch: 1; background: transparent; }
+                if !root.busy: HorizontalLayout {
+                    spacing: 10px;
+                    Button { text: "仍然退出"; clicked => { root.force-shutdown-requested(); } }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                    Button { text: "重试恢复"; primary: true; clicked => { root.retry-shutdown-requested(); } }
                 }
             }
         }

@@ -24,6 +24,7 @@ enum AgentAction {
     CommitCurrentConfig,
     SetSelectionMode(pulsehub_ipc::SelectionMode),
     SetStartup(bool),
+    Shutdown(bool),
 }
 
 fn main() -> ExitCode {
@@ -43,6 +44,8 @@ fn main() -> ExitCode {
         )),
         Some("--enable-startup") => run_agent_action(AgentAction::SetStartup(true)),
         Some("--disable-startup") => run_agent_action(AgentAction::SetStartup(false)),
+        Some("--shutdown-agent") => run_agent_action(AgentAction::Shutdown(false)),
+        Some("--force-shutdown-agent") => run_agent_action(AgentAction::Shutdown(true)),
         Some("-h" | "--help") => {
             print_help();
             ExitCode::SUCCESS
@@ -89,13 +92,11 @@ fn run_gui() -> ExitCode {
             && ui.get_draft_dirty()
         {
             let _ = ui.show();
+            ui.set_quit_after_close(true);
             ui.set_close_dialog_visible(true);
             return;
         }
-        if let Some(tray) = tray_quit_tray.upgrade() {
-            let _ = tray.hide();
-        }
-        let _ = slint::quit_event_loop();
+        begin_safe_shutdown(tray_quit_ui.clone(), tray_quit_tray.clone(), false);
     });
     if let Err(error) = tray.show() {
         eprintln!("PulseHub 托盘显示失败：{error}");
@@ -108,6 +109,7 @@ fn run_gui() -> ExitCode {
             return slint::CloseRequestResponse::HideWindow;
         };
         if should_prompt_before_close(ui.get_draft_dirty()) {
+            ui.set_quit_after_close(false);
             ui.set_close_dialog_visible(true);
             slint::CloseRequestResponse::KeepWindowShown
         } else {
@@ -128,6 +130,7 @@ fn run_gui() -> ExitCode {
     });
 
     let save_ui = ui.as_weak();
+    let save_tray = tray.as_weak();
     ui.on_save_requested(
         move |office_dpi,
               cs2_dpi,
@@ -157,6 +160,7 @@ fn run_gui() -> ExitCode {
                 .map(|ui| dpi_levels_from_ui(&ui, false))
                 .unwrap_or([800, 1600, 2400, 3200]);
             let worker_ui = save_ui.clone();
+            let worker_tray = save_tray.clone();
             std::thread::spawn(move || {
                 let result = save_gui_config(
                     office_dpi as u16,
@@ -182,7 +186,16 @@ fn run_gui() -> ExitCode {
                             );
                             if ui.get_close_after_save() {
                                 ui.set_close_after_save(false);
-                                let _ = ui.hide();
+                                if ui.get_quit_after_close() {
+                                    ui.set_quit_after_close(false);
+                                    begin_safe_shutdown(
+                                        worker_ui.clone(),
+                                        worker_tray.clone(),
+                                        false,
+                                    );
+                                } else {
+                                    let _ = ui.hide();
+                                }
                             }
                         }
                     }
@@ -222,12 +235,32 @@ fn run_gui() -> ExitCode {
     let discard_ui = ui.as_weak();
     ui.on_discard_requested(move || refresh_gui(discard_ui.clone()));
     let close_discard_ui = ui.as_weak();
+    let close_discard_tray = tray.as_weak();
     ui.on_discard_and_close_requested(move || {
         if let Some(ui) = close_discard_ui.upgrade() {
             ui.set_draft_dirty(false);
             ui.set_close_after_save(false);
-            let _ = ui.hide();
+            if ui.get_quit_after_close() {
+                ui.set_quit_after_close(false);
+                begin_safe_shutdown(close_discard_ui.clone(), close_discard_tray.clone(), false);
+            } else {
+                let _ = ui.hide();
+            }
         }
+    });
+    let retry_shutdown_ui = ui.as_weak();
+    let retry_shutdown_tray = tray.as_weak();
+    ui.on_retry_shutdown_requested(move || {
+        begin_safe_shutdown(
+            retry_shutdown_ui.clone(),
+            retry_shutdown_tray.clone(),
+            false,
+        )
+    });
+    let force_shutdown_ui = ui.as_weak();
+    let force_shutdown_tray = tray.as_weak();
+    ui.on_force_shutdown_requested(move || {
+        begin_safe_shutdown(force_shutdown_ui.clone(), force_shutdown_tray.clone(), true)
     });
     let apply_ui = ui.as_weak();
     ui.on_retry_apply_requested(move || {
@@ -1060,6 +1093,82 @@ fn apply_agent_now() -> Result<(AgentSnapshot, pulsehub_config_store::ConfigDocu
 }
 
 #[cfg(windows)]
+fn begin_safe_shutdown(ui: slint::Weak<AppWindow>, tray: slint::Weak<AppTray>, force: bool) {
+    if let Some(ui) = ui.upgrade() {
+        ui.set_busy(true);
+        ui.set_shutdown_dialog_visible(true);
+        ui.set_shutdown_title(
+            if force {
+                "正在退出 PulseHub"
+            } else {
+                "正在安全还原鼠标"
+            }
+            .into(),
+        );
+        ui.set_shutdown_detail(
+            if force {
+                "正在请求代理立即退出。"
+            } else {
+                "代理正在设置 DPI 1600，并将六个按键恢复为原生功能；完成回读后自动退出。"
+            }
+            .into(),
+        );
+        let _ = ui.show();
+    }
+    std::thread::spawn(move || {
+        let result = request_agent_shutdown(force);
+        let _ = slint::invoke_from_event_loop(move || {
+            if force || result.is_ok() {
+                if let Some(tray) = tray.upgrade() {
+                    let _ = tray.hide();
+                }
+                let _ = slint::quit_event_loop();
+                return;
+            }
+            if let Some(ui) = ui.upgrade() {
+                ui.set_busy(false);
+                ui.set_shutdown_title("鼠标安全还原失败".into());
+                ui.set_shutdown_detail(
+                    format!(
+                        "{}\n可以重试恢复，或确认仍然退出 PulseHub。",
+                        result.expect_err("失败分支必须包含错误")
+                    )
+                    .into(),
+                );
+                let _ = ui.show();
+            }
+        });
+    });
+}
+
+#[cfg(windows)]
+fn request_agent_shutdown(force: bool) -> Result<serde_json::Value, String> {
+    use pulsehub_ipc::windows::{connect_with_retry, default_pipe_path};
+    let mut stream = connect_with_retry(
+        default_pipe_path().map_err(|error| error.to_string())?,
+        Duration::from_secs(5),
+        Duration::from_millis(100),
+    )
+    .map_err(|error| error.to_string())?;
+    negotiate(&mut stream)?;
+    exchange(
+        &mut stream,
+        &Request::Shutdown {
+            version: PROTOCOL_VERSION,
+            request_id: if force {
+                "gui-force-shutdown"
+            } else {
+                "gui-safe-shutdown"
+            }
+            .into(),
+            force,
+        },
+    )?
+    .data
+    .ok_or_else(|| "代理没有返回退出结果".to_owned())
+}
+
+#[cfg(windows)]
 fn negotiate(stream: &mut pulsehub_ipc::windows::ByteStream) -> Result<(), String> {
     exchange(
         stream,
@@ -1218,6 +1327,16 @@ fn run_agent_action(action: AgentAction) -> ExitCode {
             base_revision,
             draft: draft.expect("登录启动操作必须加载草稿"),
         },
+        AgentAction::Shutdown(force) => Request::Shutdown {
+            version: PROTOCOL_VERSION,
+            request_id: if force {
+                "config-force-shutdown-1"
+            } else {
+                "config-safe-shutdown-1"
+            }
+            .to_owned(),
+            force,
+        },
     };
     let response = match exchange(&mut stream, &request) {
         Ok(response) => response,
@@ -1232,6 +1351,10 @@ fn run_agent_action(action: AgentAction) -> ExitCode {
     };
     if matches!(action, AgentAction::ValidateCurrentConfig) {
         println!("配置草稿验证通过：{data}");
+        return ExitCode::SUCCESS;
+    }
+    if matches!(action, AgentAction::Shutdown(_)) {
+        println!("代理退出请求完成：{data}");
         return ExitCode::SUCCESS;
     }
     let snapshot: AgentSnapshot = match serde_json::from_value(data) {
@@ -1310,6 +1433,8 @@ fn print_help() {
     println!("  --set-selection-cs2  将环境选择保存为固定 CS2");
     println!("  --enable-startup  保存并创建当前用户登录启动项");
     println!("  --disable-startup  保存并删除当前用户登录启动项");
+    println!("  --shutdown-agent  还原 DPI 1600 和六个原生按键后安全退出代理");
+    println!("  --force-shutdown-agent  跳过鼠标还原并立即退出代理");
 }
 
 #[cfg(test)]

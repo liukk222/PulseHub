@@ -40,6 +40,9 @@ pub fn run(
         if on_commands() {
             retry_at = Some(Instant::now());
         }
+        if stopping.load(Ordering::Acquire) {
+            break;
+        }
         match receiver.recv_timeout(Duration::from_millis(250)) {
             Ok(()) => {
                 std::thread::sleep(Duration::from_millis(75));

@@ -44,6 +44,11 @@ pub enum Request {
         version: u32,
         request_id: String,
     },
+    Shutdown {
+        version: u32,
+        request_id: String,
+        force: bool,
+    },
     SetSelectionMode {
         version: u32,
         request_id: String,
@@ -63,6 +68,7 @@ impl Request {
             | Self::ValidateDraft { version, .. }
             | Self::CommitConfig { version, .. }
             | Self::ApplyNow { version, .. }
+            | Self::Shutdown { version, .. }
             | Self::SetSelectionMode { version, .. }
             | Self::AttachUi { version, .. } => *version,
         }
@@ -75,6 +81,7 @@ impl Request {
             | Self::ValidateDraft { request_id, .. }
             | Self::CommitConfig { request_id, .. }
             | Self::ApplyNow { request_id, .. }
+            | Self::Shutdown { request_id, .. }
             | Self::SetSelectionMode { request_id, .. }
             | Self::AttachUi { request_id, .. } => request_id,
         }
@@ -87,6 +94,7 @@ impl Request {
             Self::ValidateDraft { .. } => "validate_draft",
             Self::CommitConfig { .. } => "commit_config",
             Self::ApplyNow { .. } => "apply_now",
+            Self::Shutdown { .. } => "shutdown",
             Self::SetSelectionMode { .. } => "set_selection_mode",
             Self::AttachUi { .. } => "attach_ui",
         }
@@ -506,6 +514,15 @@ mod tests {
             }
             .wire_name(),
             "get_snapshot"
+        );
+        assert_eq!(
+            Request::Shutdown {
+                version: 1,
+                request_id: "shutdown-1".to_owned(),
+                force: false,
+            }
+            .wire_name(),
+            "shutdown"
         );
     }
 
