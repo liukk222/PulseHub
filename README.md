@@ -1,38 +1,164 @@
 # PulseHub
 
+[简体中文](README_ZH.md) | **English**
+
 [![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png)](https://slint.dev/)
 
-PulseHub 是一个面向 Windows 11 的轻量鼠标配置工具。MVP 目标是为 Logitech G102 LIGHTSYNC 提供真实硬件 DPI 与一对一按键映射，并在办公和 CS2 环境之间自动切换。
+PulseHub is a lightweight, open-source mouse configuration application for Windows 11. Version 0.1.0 provides tested hardware control for the **Logitech G102 LIGHTSYNC**: DPI, report rate, button mappings, application profiles, automatic profile switching, safe shutdown restoration, and a bilingual Slint interface.
 
-当前仓库已实现并通过 G102 实机验证：Windows HID/HID++ 探测、DPI 与按键配置读写、Office/CS2 自动切换、设备重连恢复、Named Pipe IPC、Slint GUI、系统托盘和可选开发者日志。`pulsehub-agent.exe` 独立负责设备控制，关闭 GUI 后自动切换仍会继续运行。
+PulseHub is an independent project. It is not affiliated with, authorized by, or endorsed by Logitech.
 
-## G102 探测
+## Download
 
-~~~powershell
-# 只读：枚举 HID、功能表和当前 DPI
-cargo run -p pulsehub-probe
+Download the latest Windows installer from [GitHub Releases](https://github.com/liukk222/PulseHub/releases/latest):
 
-# 写入：缺少确认参数时程序会拒绝执行
-cargo run -p pulsehub-probe -- --set-dpi 800 --confirm-device-write
-~~~
+- [PulseHub v0.1.0 Windows 11 x64 installer](https://github.com/liukk222/PulseHub/releases/download/v0.1.0/PulseHub-Setup-0.1.0-windows-x64.exe)
+- [SHA-256 checksum file](https://github.com/liukk222/PulseHub/releases/download/v0.1.0/PulseHub-Setup-0.1.0-windows-x64.exe.sha256)
 
-`--set-dpi` 会先按设备运行时公布的范围和步进校验数值，写入后再次读取 DPI；回读不一致时返回失败。该命令修改真实硬件 DPI，执行前应退出 Logitech G HUB。
+Verify the downloaded installer in PowerShell:
 
-## 构建
+```powershell
+Get-FileHash .\PulseHub-Setup-0.1.0-windows-x64.exe -Algorithm SHA256
+```
 
-~~~powershell
+Expected SHA-256:
+
+```text
+1B5D06DF1E35BAAD81F2EC68F0808AAD6BCA42E9549F574C415E0611AE67F1D8
+```
+
+The v0.1.0 installer is not digitally signed. Windows SmartScreen may display an unknown-publisher warning. Download it only from this repository and verify the checksum before running it.
+
+## Supported platform and device
+
+- Windows 11 x64
+- Logitech G102 LIGHTSYNC, USB ID `046d:c092`
+- Rust source builds use the MSVC toolchain
+
+Other mouse models and operating systems are not declared supported by v0.1.0.
+
+## Features
+
+- Real HID/HID++ device discovery, capability queries, writes, and read-back verification
+- Configurable DPI and native four-level DPI cycling
+- Fixed report-rate choices: 1000, 500, 250, or 125 Hz
+- Native actions or keyboard shortcuts for the middle button, G4, G5, and G6
+- Protected native left and right clicks
+- Office, CS2, and user-imported EXE profiles
+- Automatic foreground-application switching or a fixed profile mode
+- Device reconnect recovery and bounded retry behavior
+- Lightweight background agent and system tray; closing the GUI does not stop profile switching
+- User-configurable safe-exit profile with hardware read-back verification
+- Optional start at sign-in and developer logs; developer logs are off by default
+- Simplified Chinese and English interfaces
+- Logitech G102 LIGHTSYNC lighting is always disabled and is not configurable
+
+## Install
+
+1. Exit Logitech G HUB to prevent both applications from controlling the mouse simultaneously.
+2. Run `PulseHub-Setup-0.1.0-windows-x64.exe`.
+3. Choose Simplified Chinese or English for the installer.
+4. Read and accept the installation agreement and third-party notice.
+5. Choose the installation directory and the default PulseHub interface language.
+6. Start PulseHub and configure the Office, CS2, or imported application profiles.
+
+The installer places the MIT license and third-party notices in the installation directory.
+
+## Build from source
+
+### Requirements
+
+- Windows 11 x64
+- Git
+- Rust 1.97 or newer with the `x86_64-pc-windows-msvc` toolchain
+- Microsoft C++ Build Tools for the MSVC linker and native dependencies
+- PowerShell 7 is recommended
+
+Clone and enter the repository:
+
+```powershell
+git clone https://github.com/liukk222/PulseHub.git
+cd PulseHub
+```
+
+Validate and build the workspace:
+
+```powershell
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace
-~~~
+```
 
-若全局 Cargo 镜像无法返回 `config.json` 或依赖索引，应修复/移除该镜像配置后再构建；不要修改 `Cargo.lock` 来绕过索引故障。
+Build the optimized production binaries:
 
-完整架构、协议验证门槛、IPC 和测试策略见 [实现文档索引](docs/IMPLEMENTATION.md)。继续开发前请阅读 [下一阶段开发交接](docs/NEXT_STEPS.md)。
+```powershell
+cargo build --release -p pulsehub-agent -p pulsehub-config
+```
 
-## 许可证
+The binaries are written to:
 
-PulseHub 以 [MIT 许可证](LICENSE)开源。第三方组件及兼容性研究参考资料的声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，Windows 依赖审计见 [docs/DEPENDENCY_LICENSE_AUDIT.md](docs/DEPENDENCY_LICENSE_AUDIT.md)。
+```text
+target\release\pulsehub-agent.exe
+target\release\pulsehub-config.exe
+```
 
-PulseHub 是独立开源项目，与 Logitech 不存在关联，也未获得其认可或赞助。Logitech 及相关产品名称是其各自权利人的商标。
+Run the GUI from source:
+
+```powershell
+cargo run -p pulsehub-config
+```
+
+PulseHub starts the background agent when required. Commands that perform device writes require explicit confirmation internally; development tools also expose confirmation flags to prevent accidental HID writes.
+
+## Build the Windows installer
+
+Install [Inno Setup 6](https://jrsoftware.org/isinfo.php), then run:
+
+```powershell
+winget install --id JRSoftware.InnoSetup -e
+.\installer\build-installer.ps1
+```
+
+The script builds the Rust release binaries, verifies the pinned Simplified Chinese Inno Setup language file, extracts the PulseHub icon, and writes the single-file installer to `installer\output`.
+
+To reuse existing release binaries:
+
+```powershell
+.\installer\build-installer.ps1 -SkipRustBuild
+```
+
+## Workspace layout
+
+```text
+apps/pulsehub-agent       Background device agent and system tray
+apps/pulsehub-config      Slint configuration GUI
+crates/pulsehub-device    HID discovery and Logitech HID++ implementation
+crates/pulsehub-config-store
+                          Configuration schema, validation, and atomic storage
+crates/pulsehub-ipc       Named Pipe IPC protocol and Windows transport
+crates/pulsehub-profile   Profile selection and switching logic
+crates/pulsehub-ui        Shared Slint integration
+tools/pulsehub-probe      Read-only discovery and explicitly confirmed test writes
+installer                 Windows installer source and build script
+docs                      Architecture and implementation documentation
+```
+
+Detailed architecture, HID++, IPC, configuration, GUI, testing, and release documentation starts at [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md).
+
+## Hardware safety
+
+PulseHub can write DPI, report rate, button mappings, lighting state, and onboard configuration to a physical mouse. Before changing HID++ code or running write tests:
+
+- confirm the exact device identity;
+- exit Logitech G HUB;
+- keep read-back verification enabled;
+- use explicit confirmation arguments in development tools;
+- preserve native left and right clicks;
+- avoid unnecessary onboard flash writes.
+
+## License
+
+PulseHub's original source code is licensed under the [MIT License](LICENSE). Third-party components and compatibility research references remain subject to their own terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the [Windows dependency license audit](docs/DEPENDENCY_LICENSE_AUDIT.md).
+
+Logitech, Logitech G, G102 LIGHTSYNC, and related product names and marks belong to their respective owners.
