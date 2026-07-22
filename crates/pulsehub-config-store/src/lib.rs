@@ -20,6 +20,10 @@ pub struct ConfigDocument {
     pub agent: AgentConfig,
     pub selection: SelectionConfig,
     pub profiles: ProfilesConfig,
+    #[serde(default)]
+    pub applications: Vec<ApplicationProfileConfig>,
+    #[serde(default = "default_shutdown_profile")]
+    pub shutdown_profile: ProfileConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +32,16 @@ pub struct AgentConfig {
     pub start_with_windows: bool,
     #[serde(default)]
     pub developer_logging: bool,
+    #[serde(default)]
+    pub language: UiLanguage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum UiLanguage {
+    #[default]
+    ZhCn,
+    En,
 }
 
 impl Default for AgentConfig {
@@ -35,6 +49,7 @@ impl Default for AgentConfig {
         Self {
             start_with_windows: true,
             developer_logging: false,
+            language: UiLanguage::ZhCn,
         }
     }
 }
@@ -43,6 +58,8 @@ impl Default for AgentConfig {
 #[serde(deny_unknown_fields)]
 pub struct SelectionConfig {
     pub mode: SelectionMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_application_id: Option<String>,
     #[serde(default)]
     pub rules: Vec<SelectionRule>,
 }
@@ -53,6 +70,7 @@ pub enum SelectionMode {
     Auto,
     Office,
     Cs2,
+    Application,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,10 +91,22 @@ pub struct ProfilesConfig {
 #[serde(deny_unknown_fields)]
 pub struct ProfileConfig {
     pub dpi: u16,
+    #[serde(default = "default_report_rate_hz")]
+    pub report_rate_hz: u16,
     #[serde(default = "default_dpi_levels")]
     pub dpi_levels: Vec<u16>,
     #[serde(default)]
     pub button_mappings: Vec<ButtonMappingConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApplicationProfileConfig {
+    pub id: String,
+    pub name: String,
+    pub executable_path: String,
+    pub process_name: String,
+    pub profile: ProfileConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,6 +253,7 @@ impl Default for ConfigDocument {
             agent: AgentConfig::default(),
             selection: SelectionConfig {
                 mode: SelectionMode::Auto,
+                fixed_application_id: None,
                 rules: vec![SelectionRule {
                     environment: ProfileName::Cs2,
                     process_names: vec!["cs2.exe".to_owned()],
@@ -231,15 +262,19 @@ impl Default for ConfigDocument {
             profiles: ProfilesConfig {
                 office: ProfileConfig {
                     dpi: 1600,
+                    report_rate_hz: default_report_rate_hz(),
                     dpi_levels: default_dpi_levels(),
                     button_mappings: office_buttons.clone(),
                 },
                 cs2: ProfileConfig {
-                    dpi: 800,
+                    dpi: 1600,
+                    report_rate_hz: default_report_rate_hz(),
                     dpi_levels: default_dpi_levels(),
                     button_mappings: office_buttons,
                 },
             },
+            applications: Vec::new(),
+            shutdown_profile: default_shutdown_profile(),
         }
     }
 }
@@ -253,6 +288,79 @@ impl ConfigDocument {
         }
         validate_profile("office", &self.profiles.office)?;
         validate_profile("cs2", &self.profiles.cs2)?;
+        validate_profile("shutdown", &self.shutdown_profile)?;
+        let mut application_ids = HashSet::new();
+        let mut application_processes = HashSet::new();
+        let mut application_names = HashSet::new();
+        for application in &self.applications {
+            if application.id.trim().is_empty()
+                || !application
+                    .id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            {
+                return Err(ConfigError::Validation(
+                    "应用环境 id 只能包含字母、数字、连字符和下划线".to_owned(),
+                ));
+            }
+            if !application_ids.insert(application.id.to_ascii_lowercase()) {
+                return Err(ConfigError::Validation(format!(
+                    "应用环境 id 重复：{}",
+                    application.id
+                )));
+            }
+            if application.name.trim().is_empty() || application.executable_path.trim().is_empty() {
+                return Err(ConfigError::Validation(
+                    "应用环境名称和 EXE 路径不能为空".to_owned(),
+                ));
+            }
+            if !application_names.insert(application.name.to_ascii_lowercase()) {
+                return Err(ConfigError::Validation(format!(
+                    "应用环境名称重复：{}",
+                    application.name
+                )));
+            }
+            if !application
+                .process_name
+                .to_ascii_lowercase()
+                .ends_with(".exe")
+            {
+                return Err(ConfigError::Validation(format!(
+                    "应用环境进程名必须以 .exe 结尾：{}",
+                    application.process_name
+                )));
+            }
+            if !application_processes.insert(application.process_name.to_ascii_lowercase()) {
+                return Err(ConfigError::Validation(format!(
+                    "应用环境进程名重复：{}",
+                    application.process_name
+                )));
+            }
+            validate_profile(
+                &format!("application.{}", application.id),
+                &application.profile,
+            )?;
+        }
+        match self.selection.mode {
+            SelectionMode::Application => {
+                let id = self
+                    .selection
+                    .fixed_application_id
+                    .as_deref()
+                    .ok_or_else(|| {
+                        ConfigError::Validation("固定应用模式缺少应用环境 id".to_owned())
+                    })?;
+                if !application_ids.contains(&id.to_ascii_lowercase()) {
+                    return Err(ConfigError::Validation(format!("固定应用环境不存在：{id}")));
+                }
+            }
+            _ if self.selection.fixed_application_id.is_some() => {
+                return Err(ConfigError::Validation(
+                    "非固定应用模式不能保存 fixed_application_id".to_owned(),
+                ));
+            }
+            _ => {}
+        }
         if self.selection.mode == SelectionMode::Auto && self.selection.rules.is_empty() {
             return Err(ConfigError::Validation(
                 "auto 模式至少需要一条进程规则".to_owned(),
@@ -284,6 +392,9 @@ impl ConfigDocument {
         })?;
         normalize_profile_dpi_levels(&mut document.profiles.office);
         normalize_profile_dpi_levels(&mut document.profiles.cs2);
+        for application in &mut document.applications {
+            normalize_profile_dpi_levels(&mut application.profile);
+        }
         document.validate()?;
         Ok(document)
     }
@@ -365,6 +476,11 @@ fn io_error(path: &Path, source: io::Error) -> ConfigError {
 fn validate_profile(name: &str, profile: &ProfileConfig) -> Result<(), ConfigError> {
     if profile.dpi == 0 {
         return Err(ConfigError::Validation(format!("{name} DPI 必须大于 0")));
+    }
+    if ![1000, 500, 250, 125].contains(&profile.report_rate_hz) {
+        return Err(ConfigError::Validation(format!(
+            "{name} 回报率只能是 1000、500、250 或 125 Hz"
+        )));
     }
     if profile.dpi_levels.len() != 4
         || profile.dpi_levels.contains(&0)
@@ -452,6 +568,19 @@ fn default_dpi_levels() -> Vec<u16> {
     vec![800, 1600, 2400, 3200]
 }
 
+fn default_report_rate_hz() -> u16 {
+    1000
+}
+
+fn default_shutdown_profile() -> ProfileConfig {
+    ProfileConfig {
+        dpi: 1600,
+        report_rate_hz: default_report_rate_hz(),
+        dpi_levels: default_dpi_levels(),
+        button_mappings: office_button_mappings(),
+    }
+}
+
 fn profile_uses_dpi_cycle(profile: &ProfileConfig) -> bool {
     profile.button_mappings.iter().any(|mapping| {
         mapping.physical_control == "g102:dpi"
@@ -491,8 +620,9 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        ButtonActionConfig, ConfigDocument, ConfigError, ConfigRepository, SelectionMode,
-        backup_path, load_or_create_default, load_with_backup, save_atomic,
+        ApplicationProfileConfig, ButtonActionConfig, ConfigDocument, ConfigError,
+        ConfigRepository, SelectionMode, backup_path, load_or_create_default, load_with_backup,
+        office_button_mappings, save_atomic,
     };
 
     #[test]
@@ -513,6 +643,29 @@ mod tests {
             document.validate(),
             Err(ConfigError::Validation(_))
         ));
+    }
+
+    #[test]
+    fn report_rate_accepts_only_the_four_product_options() {
+        for rate in [1000, 500, 250, 125] {
+            let mut document = ConfigDocument::default();
+            document.profiles.office.report_rate_hz = rate;
+            assert!(document.validate().is_ok(), "{rate} Hz 应当有效");
+        }
+        let mut document = ConfigDocument::default();
+        document.profiles.office.report_rate_hz = 333;
+        assert!(matches!(
+            document.validate(),
+            Err(ConfigError::Validation(_))
+        ));
+    }
+
+    #[test]
+    fn default_shutdown_profile_preserves_the_previous_safe_exit_behavior() {
+        let profile = &ConfigDocument::default().shutdown_profile;
+        assert_eq!(profile.dpi, 1600);
+        assert_eq!(profile.report_rate_hz, 1000);
+        assert_eq!(profile.button_mappings, office_button_mappings());
     }
 
     #[test]
@@ -550,6 +703,32 @@ mod tests {
 
         assert_eq!(migrated.profiles.office.dpi, 1800);
         assert_eq!(migrated.profiles.office.dpi_levels, [800, 1800, 2400, 3200]);
+    }
+
+    #[test]
+    fn application_profiles_round_trip_and_reject_duplicate_processes() {
+        let mut document = ConfigDocument::default();
+        document.applications.push(ApplicationProfileConfig {
+            id: "winword".to_owned(),
+            name: "WINWORD".to_owned(),
+            executable_path: r"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE"
+                .to_owned(),
+            process_name: "WINWORD.EXE".to_owned(),
+            profile: document.profiles.cs2.clone(),
+        });
+        let text = document.to_toml().unwrap();
+        let decoded = ConfigDocument::from_toml("config.toml".as_ref(), &text).unwrap();
+        assert_eq!(decoded.applications, document.applications);
+
+        let mut duplicate = document.applications[0].clone();
+        duplicate.id = "word_second".to_owned();
+        duplicate.name = "Word Second".to_owned();
+        duplicate.process_name = "winword.exe".to_owned();
+        document.applications.push(duplicate);
+        assert!(matches!(
+            document.validate(),
+            Err(ConfigError::Validation(message)) if message.contains("进程名重复")
+        ));
     }
 
     #[test]

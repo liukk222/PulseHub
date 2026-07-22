@@ -1,3 +1,4 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
 #![forbid(unsafe_code)]
 
 mod foreground;
@@ -18,7 +19,8 @@ use pulsehub_config_store::{
 use pulsehub_core::Environment;
 use pulsehub_device::hidpp::{
     DpiWriteResult, HidppError, OnboardButtonAction, activate_first_g102_onboard_mode,
-    apply_first_g102_profile, probe_first_g102, read_first_g102_dpi, set_first_g102_dpi,
+    apply_first_g102_profile, ensure_first_g102_lighting_off, probe_first_g102,
+    read_first_g102_dpi, set_first_g102_dpi,
 };
 use pulsehub_ipc::{
     AgentSnapshot, DeviceStatus, DpiCapability, Environment as IpcEnvironment, IntegrationStatus,
@@ -46,7 +48,10 @@ struct EnvironmentTarget {
     executable_name: String,
     process_id: u64,
     environment: Environment,
+    profile_key: String,
+    profile_name: String,
     dpi: u16,
+    report_rate_hz: u16,
     button_actions: [OnboardButtonAction; 6],
     dpi_levels: [u16; 4],
 }
@@ -64,6 +69,14 @@ const SHUTDOWN_DEVICE_WAIT: Duration = Duration::from_secs(10);
 const SHUTDOWN_DEVICE_RETRY: Duration = Duration::from_millis(250);
 const SHUTDOWN_MAX_ATTEMPTS: u8 = 3;
 
+fn shutdown_marker_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("PulseHub-ShuttingDown-v1")
+}
+
+fn create_shutdown_marker() {
+    let _ = std::fs::write(shutdown_marker_path(), b"shutdown");
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SwitchDecision {
     AlreadyActive,
@@ -73,7 +86,7 @@ enum SwitchDecision {
 
 #[derive(Debug, Default)]
 struct EnvironmentSwitchGuard {
-    pending: Option<(Environment, Instant)>,
+    pending: Option<(String, Instant)>,
     last_applied_at: Option<Instant>,
 }
 
@@ -102,24 +115,20 @@ impl DeviceHealthMonitor {
 }
 
 impl EnvironmentSwitchGuard {
-    fn decide(
-        &mut self,
-        target: Environment,
-        active: Option<Environment>,
-        now: Instant,
-    ) -> SwitchDecision {
+    fn decide(&mut self, target: &str, active: Option<&str>, now: Instant) -> SwitchDecision {
         if active == Some(target) {
             self.pending = None;
             return SwitchDecision::AlreadyActive;
         }
         if self
             .pending
+            .as_ref()
             .is_none_or(|(environment, _)| environment != target)
         {
-            self.pending = Some((target, now));
+            self.pending = Some((target.to_owned(), now));
             return SwitchDecision::Wait(ENVIRONMENT_STABLE_FOR);
         }
-        let pending_since = self.pending.expect("待应用环境必须存在").1;
+        let pending_since = self.pending.as_ref().expect("待应用环境必须存在").1;
         let stable_elapsed = now.saturating_duration_since(pending_since);
         if stable_elapsed < ENVIRONMENT_STABLE_FOR {
             return SwitchDecision::Wait(ENVIRONMENT_STABLE_FOR - stable_elapsed);
@@ -171,6 +180,7 @@ enum DeviceCommand {
 }
 
 fn main() -> ExitCode {
+    let _ = std::fs::remove_file(shutdown_marker_path());
     if let Err(error) = local_log::initialize() {
         eprintln!("本地日志初始化失败：{error}");
     }
@@ -419,7 +429,9 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
         }
     }
 
-    let mut tracker = EnvironmentTracker::default();
+    let tray_thread = spawn_agent_tray(command_tx.clone(), Arc::clone(&stopping));
+
+    let mut active_profile_key: Option<String> = None;
     let mut backoff = RetryBackoff::default();
     let mut switch_guard = EnvironmentSwitchGuard::default();
     let foreground_snapshot = Arc::clone(&snapshot);
@@ -434,7 +446,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
         Arc::clone(&stopping),
         || {
             if foreground_recovery.replace(false) {
-                tracker.invalidate();
+                active_profile_key = None;
                 switch_guard.pending = None;
                 println!("设备健康检查连续失败，当前环境状态已失效，开始重新连接并恢复配置。");
                 local_log::error(format_args!(
@@ -459,8 +471,13 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
             };
             let is_new_pending = switch_guard
                 .pending
-                .is_none_or(|(environment, _)| environment != target.environment);
-            match switch_guard.decide(target.environment, tracker.current(), Instant::now()) {
+                .as_ref()
+                .is_none_or(|(profile_key, _)| profile_key != &target.profile_key);
+            match switch_guard.decide(
+                &target.profile_key,
+                active_profile_key.as_deref(),
+                Instant::now(),
+            ) {
                 SwitchDecision::AlreadyActive => return None,
                 SwitchDecision::Wait(delay) => {
                     if is_new_pending {
@@ -492,7 +509,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
             // DPI 模式；apply_target_full 会先比较回读内容，完全一致时不写闪存。
             match apply_target_full(&target) {
                 Ok(applied) => {
-                    tracker.observe(target.environment);
+                    active_profile_key = Some(target.profile_key.clone());
                     switch_guard.record_applied(Instant::now());
                     backoff.record_success();
                     let previous = foreground_snapshot
@@ -578,6 +595,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                     DeviceCommand::Shutdown { force, reply } => {
                         if force {
                             local_log::audit(format_args!("用户确认仍然退出；跳过鼠标安全还原"));
+                            create_shutdown_marker();
                             stopping.store(true, Ordering::Release);
                             let _ = reply.send(Ok(serde_json::json!({
                                 "shutdown": true,
@@ -587,15 +605,19 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                             break;
                         }
 
+                        let shutdown_profile =
+                            repository.borrow().document().shutdown_profile.clone();
                         local_log::audit(format_args!(
-                            "开始安全退出：目标 DPI=1600，六个按键恢复原生功能"
+                            "开始安全退出：目标 DPI={}，回报率={} Hz，应用用户退出配置",
+                            shutdown_profile.dpi, shutdown_profile.report_rate_hz
                         ));
-                        match apply_safe_shutdown() {
+                        match apply_safe_shutdown(&shutdown_profile) {
                             Ok(applied) => {
                                 local_log::audit(format_args!(
-                                    "安全退出还原并回读成功：DPI={}，六个按键均为原生功能",
-                                    applied.after
+                                    "安全退出配置写入并回读成功：DPI={}，回报率={} Hz",
+                                    applied.after, shutdown_profile.report_rate_hz
                                 ));
+                                create_shutdown_marker();
                                 stopping.store(true, Ordering::Release);
                                 let _ = reply.send(Ok(serde_json::json!({
                                     "shutdown": true,
@@ -609,6 +631,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                                     "安全退出时设备未连接，无法恢复；代理将在有界尝试后退出：{}",
                                     error.message
                                 ));
+                                create_shutdown_marker();
                                 stopping.store(true, Ordering::Release);
                                 let _ = reply.send(Ok(serde_json::json!({
                                     "shutdown": true,
@@ -664,6 +687,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                             let desired_dpi = match previous.active_environment {
                                 IpcEnvironment::Office => current_config.profiles.office.dpi,
                                 IpcEnvironment::Cs2 => current_config.profiles.cs2.dpi,
+                                IpcEnvironment::Custom => previous.desired_dpi,
                             };
                             let current = AgentSnapshot {
                                 device_status: previous.device_status,
@@ -671,6 +695,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                                 config_revision: revision,
                                 current_dpi: previous.current_dpi,
                                 desired_dpi,
+                                active_profile_name: previous.active_profile_name,
                                 dpi_capability: previous.dpi_capability,
                                 integration_status: sync_start_with_windows(
                                     current_config.agent.start_with_windows,
@@ -716,16 +741,19 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                             let desired_dpi = match environment {
                                 Environment::Office => config.profiles.office.dpi,
                                 Environment::Cs2 => config.profiles.cs2.dpi,
+                                Environment::Custom => previous.desired_dpi,
                             };
                             let current = AgentSnapshot {
                                 device_status: previous.device_status,
                                 active_environment: match environment {
                                     Environment::Office => IpcEnvironment::Office,
                                     Environment::Cs2 => IpcEnvironment::Cs2,
+                                    Environment::Custom => IpcEnvironment::Custom,
                                 },
                                 config_revision: revision,
                                 current_dpi: previous.current_dpi,
                                 desired_dpi,
+                                active_profile_name: previous.active_profile_name,
                                 dpi_capability: previous.dpi_capability,
                                 integration_status: previous.integration_status,
                             };
@@ -774,6 +802,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
     stopping.store(true, Ordering::Release);
     let _ = connect(&pipe_path);
     let _ = ipc_thread.join();
+    let _ = tray_thread.join();
     match result {
         Ok(()) => {
             println!("统一代理已停止，前台 hook 与 IPC listener 均已释放。");
@@ -783,6 +812,108 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
             eprintln!("统一代理运行失败：{error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(windows)]
+fn spawn_agent_tray(
+    command_tx: std::sync::mpsc::SyncSender<DeviceCommand>,
+    stopping: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        use slint::{Timer, TimerMode};
+        use std::os::windows::process::CommandExt;
+        use std::sync::atomic::Ordering;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let Ok(tray) = pulsehub_ui::AppTray::new() else {
+            return;
+        };
+        update_agent_tray_language(&tray);
+
+        let gui_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let open_gui_running = std::sync::Arc::clone(&gui_running);
+        tray.on_open_requested(move || {
+            if open_gui_running.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            if let Ok(agent) = std::env::current_exe()
+                && let Some(directory) = agent.parent()
+            {
+                let child = std::process::Command::new(directory.join("pulsehub-config.exe"))
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .spawn();
+                if let Ok(mut child) = child {
+                    let child_gui_running = std::sync::Arc::clone(&open_gui_running);
+                    std::thread::spawn(move || {
+                        let _ = child.wait();
+                        child_gui_running.store(false, Ordering::Release);
+                    });
+                    return;
+                }
+            }
+            open_gui_running.store(false, Ordering::Release);
+        });
+
+        let shutdown_signal = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let quit_shutdown_signal = std::sync::Arc::clone(&shutdown_signal);
+        let quit_tx = command_tx.clone();
+        tray.on_quit_requested(move || {
+            let (reply, receiver) = std::sync::mpsc::sync_channel(1);
+            if quit_tx
+                .try_send(DeviceCommand::Shutdown {
+                    force: false,
+                    reply,
+                })
+                .is_ok()
+                && receiver
+                    .recv_timeout(Duration::from_secs(30))
+                    .is_ok_and(|result| result.is_ok())
+            {
+                if let Ok(signal) =
+                    single_instance::SingleInstance::new("Local\\PulseHub.ShuttingDown.v1")
+                    && let Ok(mut slot) = quit_shutdown_signal.lock()
+                {
+                    *slot = Some(signal);
+                }
+                slint::quit_event_loop().ok();
+            }
+        });
+
+        if tray.show().is_err() {
+            return;
+        }
+        let language_tray = tray.as_weak();
+        let monitor = Timer::default();
+        monitor.start(TimerMode::Repeated, Duration::from_millis(500), move || {
+            if stopping.load(Ordering::Acquire) {
+                if let Some(tray) = language_tray.upgrade() {
+                    let _ = tray.hide();
+                }
+                slint::quit_event_loop().ok();
+                return;
+            }
+            if let Some(tray) = language_tray.upgrade() {
+                update_agent_tray_language(&tray);
+            }
+        });
+        let trim = Timer::default();
+        trim.start(TimerMode::SingleShot, Duration::from_secs(2), || {
+            pulsehub_ui::trim_current_process_working_set();
+        });
+        let _ = slint::run_event_loop();
+        // 让已打开的 GUI 至少有数次轮询机会观察到退出信号。
+        std::thread::sleep(Duration::from_secs(3));
+        drop(shutdown_signal);
+    })
+}
+
+#[cfg(windows)]
+fn update_agent_tray_language(tray: &pulsehub_ui::AppTray) {
+    if let Ok(path) = pulsehub_config_store::default_config_path()
+        && let Ok(config) = pulsehub_config_store::load_or_create_default(&path)
+    {
+        tray.set_english(config.agent.language == pulsehub_config_store::UiLanguage::En);
     }
 }
 
@@ -1127,10 +1258,12 @@ fn snapshot_for_target(
         active_environment: match target.environment {
             Environment::Office => IpcEnvironment::Office,
             Environment::Cs2 => IpcEnvironment::Cs2,
+            Environment::Custom => IpcEnvironment::Custom,
         },
         config_revision,
         current_dpi,
         desired_dpi: target.dpi,
+        active_profile_name: Some(target.profile_name.clone()),
         dpi_capability: None,
         integration_status: IntegrationStatus::Unknown,
     }
@@ -1273,10 +1406,31 @@ fn run_watcher(config: &ConfigDocument, exit_after_seconds: Option<u64>) -> Exit
 
 fn resolve_target(config: &ConfigDocument) -> Result<EnvironmentTarget, String> {
     let foreground = foreground::current()?;
-    let environment = selected_environment(config, Some(&foreground.executable_name));
-    let profile = match environment {
-        Environment::Office => &config.profiles.office,
-        Environment::Cs2 => &config.profiles.cs2,
+    let custom = custom_application_for_process(config, &foreground.executable_name);
+    let (environment, profile_key, profile_name, profile) = if let Some(application) = custom {
+        (
+            Environment::Custom,
+            format!("application:{}", application.id),
+            application.name.clone(),
+            &application.profile,
+        )
+    } else {
+        let environment = selected_environment(config, Some(&foreground.executable_name));
+        match environment {
+            Environment::Office => (
+                environment,
+                "office".to_owned(),
+                "办公环境".to_owned(),
+                &config.profiles.office,
+            ),
+            Environment::Cs2 => (
+                environment,
+                "cs2".to_owned(),
+                "CS 环境".to_owned(),
+                &config.profiles.cs2,
+            ),
+            Environment::Custom => unreachable!("自定义环境由应用列表解析"),
+        }
     };
     let dpi = profile.dpi;
     let button_actions = button_actions_for_profile(profile)?;
@@ -1289,35 +1443,67 @@ fn resolve_target(config: &ConfigDocument) -> Result<EnvironmentTarget, String> 
         executable_name: foreground.executable_name,
         process_id: foreground.process_id,
         environment,
+        profile_key,
+        profile_name,
         dpi,
+        report_rate_hz: profile.report_rate_hz,
         button_actions,
         dpi_levels,
     })
 }
 
-fn safe_shutdown_target() -> EnvironmentTarget {
-    EnvironmentTarget {
-        executable_name: "PulseHub shutdown".to_owned(),
-        process_id: 0,
-        environment: Environment::Office,
-        dpi: 1600,
-        button_actions: [
-            mouse_button_action(1),
-            mouse_button_action(2),
-            mouse_button_action(3),
-            mouse_button_action(4),
-            mouse_button_action(5),
-            OnboardButtonAction::Special {
-                code: 0x05,
-                profile: 0,
-            },
-        ],
-        dpi_levels: [800, 1600, 2400, 3200],
+fn custom_application_for_process<'a>(
+    config: &'a ConfigDocument,
+    executable_name: &str,
+) -> Option<&'a pulsehub_config_store::ApplicationProfileConfig> {
+    match config.selection.mode {
+        SelectionMode::Auto => config.applications.iter().find(|application| {
+            application
+                .process_name
+                .eq_ignore_ascii_case(executable_name)
+        }),
+        SelectionMode::Application => {
+            config
+                .selection
+                .fixed_application_id
+                .as_deref()
+                .and_then(|id| {
+                    config
+                        .applications
+                        .iter()
+                        .find(|application| application.id == id)
+                })
+        }
+        SelectionMode::Office | SelectionMode::Cs2 => None,
     }
 }
 
-fn apply_safe_shutdown() -> Result<DpiWriteResult, ApplyFailure> {
-    let target = safe_shutdown_target();
+fn safe_shutdown_target(profile: &ProfileConfig) -> Result<EnvironmentTarget, String> {
+    let dpi_levels = profile
+        .dpi_levels
+        .clone()
+        .try_into()
+        .map_err(|_| "退出配置的 DPI 档位必须正好包含四项".to_owned())?;
+    let button_actions = button_actions_for_profile(profile)?;
+    Ok(EnvironmentTarget {
+        executable_name: "PulseHub shutdown".to_owned(),
+        process_id: 0,
+        environment: Environment::Office,
+        profile_key: "shutdown".to_owned(),
+        profile_name: "安全退出".to_owned(),
+        dpi: profile.dpi,
+        report_rate_hz: profile.report_rate_hz,
+        button_actions,
+        dpi_levels,
+    })
+}
+
+fn apply_safe_shutdown(profile: &ProfileConfig) -> Result<DpiWriteResult, ApplyFailure> {
+    let target = safe_shutdown_target(profile).map_err(|message| ApplyFailure {
+        message,
+        retryable: false,
+        device_disconnected: false,
+    })?;
     let deadline = Instant::now() + SHUTDOWN_DEVICE_WAIT;
     let mut attempt = 0_u8;
     loop {
@@ -1411,17 +1597,15 @@ fn mouse_button_action(button: u8) -> OnboardButtonAction {
 
 fn print_target(target: &EnvironmentTarget, snapshot: &AgentSnapshot) {
     println!(
-        "前台进程：{} (PID {})；目标环境={:?}，目标 DPI={}",
-        target.executable_name,
-        target.process_id,
-        snapshot.active_environment,
-        snapshot.desired_dpi
+        "前台进程：{} (PID {})；目标环境={}，目标 DPI={}",
+        target.executable_name, target.process_id, target.profile_name, snapshot.desired_dpi
     );
     local_log::info(format_args!(
-        "环境切换目标：进程={} PID={} 环境={:?} DPI={}",
+        "环境切换目标：进程={} PID={} 环境={} 配置键={} DPI={}",
         target.executable_name,
         target.process_id,
-        snapshot.active_environment,
+        target.profile_name,
+        target.profile_key,
         snapshot.desired_dpi
     ));
 }
@@ -1472,19 +1656,25 @@ fn apply_target_full(target: &EnvironmentTarget) -> Result<DpiWriteResult, Apply
         OnboardButtonAction::Special { code: 0x05, .. }
     )
     .then_some(&target.dpi_levels);
-    let profile = apply_first_g102_profile(&target.button_actions, target.dpi, dpi_levels, false)
-        .map_err(|error| hidpp_apply_failure("板载配置写入失败", error))?;
-    if profile.changed_buttons.is_empty() && !profile.dpi_changed {
+    let profile = apply_first_g102_profile(
+        &target.button_actions,
+        target.dpi,
+        dpi_levels,
+        target.report_rate_hz,
+        false,
+    )
+    .map_err(|error| hidpp_apply_failure("板载配置写入失败", error))?;
+    if profile.changed_buttons.is_empty() && !profile.dpi_changed && !profile.report_rate_changed {
         println!("板载 DPI 与按键映射已和当前环境一致，跳过闪存写入。");
         local_log::info(format_args!("板载配置与当前环境一致；跳过闪存写入"));
     } else {
         println!(
-            "板载配置已写入并回读通过：DPI 变更={}，按键槽位 {:?}。",
-            profile.dpi_changed, profile.changed_buttons
+            "板载配置已写入并回读通过：DPI 变更={}，回报率变更={}，按键槽位 {:?}。",
+            profile.dpi_changed, profile.report_rate_changed, profile.changed_buttons
         );
         local_log::info(format_args!(
-            "板载配置写入并回读成功：DPI变更={} 按键槽位={:?}",
-            profile.dpi_changed, profile.changed_buttons
+            "板载配置写入并回读成功：DPI变更={} 回报率变更={} 按键槽位={:?}",
+            profile.dpi_changed, profile.report_rate_changed, profile.changed_buttons
         ));
     }
     let mode = activate_first_g102_onboard_mode(false)
@@ -1496,6 +1686,12 @@ fn apply_target_full(target: &EnvironmentTarget) -> Result<DpiWriteResult, Apply
             mode.before, mode.after
         ));
     }
+    let lighting = ensure_first_g102_lighting_off(false)
+        .map_err(|error| hidpp_apply_failure("固定关闭灯光失败", error))?;
+    local_log::info(format_args!(
+        "灯光固定关闭并回读通过：clusters={} 已关闭={}",
+        lighting.cluster_count, lighting.already_off
+    ));
     // G102 切入板载模式时固件总是先激活 slot 0，而不是 default_dpi_index。
     // 在 Onboard 模式下再次选择目标 DPI，并以这次回读作为 IPC 快照的真实值。
     // 2026-07-20 实机确认该写入不会把 mode 切回 Host。
@@ -1524,6 +1720,7 @@ fn selected_environment(config: &ConfigDocument, executable_name: Option<&str>) 
         SelectionMode::Auto => SelectionPolicy::Auto,
         SelectionMode::Office => SelectionPolicy::Fixed(Environment::Office),
         SelectionMode::Cs2 => SelectionPolicy::Fixed(Environment::Cs2),
+        SelectionMode::Application => SelectionPolicy::Fixed(Environment::Office),
     };
     let rules = config
         .selection
@@ -1670,9 +1867,11 @@ mod tests {
 
     #[test]
     fn safe_shutdown_target_restores_native_controls() {
-        let target = safe_shutdown_target();
+        let config = ConfigDocument::default();
+        let target = safe_shutdown_target(&config.shutdown_profile).unwrap();
 
         assert_eq!(target.dpi, 1600);
+        assert_eq!(target.report_rate_hz, 1000);
         assert_eq!(target.dpi_levels, [800, 1600, 2400, 3200]);
         assert_eq!(target.button_actions[0], mouse_button_action(1));
         assert_eq!(target.button_actions[1], mouse_button_action(2));
@@ -1689,6 +1888,16 @@ mod tests {
     }
 
     #[test]
+    fn safe_shutdown_target_uses_user_profile() {
+        let mut profile = ConfigDocument::default().shutdown_profile;
+        profile.dpi = 800;
+        profile.report_rate_hz = 250;
+        let target = safe_shutdown_target(&profile).unwrap();
+        assert_eq!(target.dpi, 800);
+        assert_eq!(target.report_rate_hz, 250);
+    }
+
+    #[test]
     fn rejects_incomplete_profile_before_device_io() {
         let mut profile = ConfigDocument::default().profiles.office;
         profile
@@ -1701,10 +1910,13 @@ mod tests {
     #[test]
     fn target_maps_to_sanitized_ipc_snapshot() {
         let target = EnvironmentTarget {
+            profile_key: "cs2".to_owned(),
+            profile_name: "CS2".to_owned(),
             executable_name: "private-process.exe".to_owned(),
             process_id: 42,
             environment: Environment::Cs2,
             dpi: 800,
+            report_rate_hz: 1000,
             button_actions: button_actions_for_profile(&ConfigDocument::default().profiles.cs2)
                 .unwrap(),
             dpi_levels: [800, 1600, 2400, 3200],
@@ -1717,6 +1929,30 @@ mod tests {
         assert_eq!(snapshot.config_revision, 7);
         assert_eq!(snapshot.current_dpi, Some(800));
         assert_eq!(snapshot.desired_dpi, 800);
+    }
+
+    #[test]
+    fn auto_mode_matches_imported_application_case_insensitively() {
+        let mut config = ConfigDocument::default();
+        config
+            .applications
+            .push(pulsehub_config_store::ApplicationProfileConfig {
+                id: "winword".to_owned(),
+                name: "Word".to_owned(),
+                executable_path: r"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE"
+                    .to_owned(),
+                process_name: "WINWORD.EXE".to_owned(),
+                profile: config.profiles.cs2.clone(),
+            });
+
+        let selected = custom_application_for_process(&config, "winword.exe").unwrap();
+        assert_eq!(selected.id, "winword");
+        config.selection.mode = SelectionMode::Office;
+        assert!(custom_application_for_process(&config, "WINWORD.EXE").is_none());
+        config.selection.mode = SelectionMode::Application;
+        config.selection.fixed_application_id = Some("winword".to_owned());
+        let fixed = custom_application_for_process(&config, "explorer.exe").unwrap();
+        assert_eq!(fixed.id, "winword");
     }
 
     #[test]
@@ -1737,31 +1973,23 @@ mod tests {
         let mut guard = EnvironmentSwitchGuard::default();
 
         assert_eq!(
-            guard.decide(Environment::Cs2, Some(Environment::Office), started),
+            guard.decide("cs2", Some("office"), started),
             SwitchDecision::Wait(ENVIRONMENT_STABLE_FOR)
         );
         assert_eq!(
             guard.decide(
-                Environment::Office,
-                Some(Environment::Office),
+                "office",
+                Some("office"),
                 started + Duration::from_millis(400)
             ),
             SwitchDecision::AlreadyActive
         );
         assert_eq!(
-            guard.decide(
-                Environment::Cs2,
-                Some(Environment::Office),
-                started + Duration::from_millis(500)
-            ),
+            guard.decide("cs2", Some("office"), started + Duration::from_millis(500)),
             SwitchDecision::Wait(ENVIRONMENT_STABLE_FOR)
         );
         assert_eq!(
-            guard.decide(
-                Environment::Cs2,
-                Some(Environment::Office),
-                started + Duration::from_millis(1500)
-            ),
+            guard.decide("cs2", Some("office"), started + Duration::from_millis(1500)),
             SwitchDecision::Apply
         );
     }
@@ -1773,27 +2001,15 @@ mod tests {
         guard.record_applied(started);
 
         assert_eq!(
-            guard.decide(
-                Environment::Cs2,
-                Some(Environment::Office),
-                started + Duration::from_secs(1)
-            ),
+            guard.decide("cs2", Some("office"), started + Duration::from_secs(1)),
             SwitchDecision::Wait(ENVIRONMENT_STABLE_FOR)
         );
         assert_eq!(
-            guard.decide(
-                Environment::Cs2,
-                Some(Environment::Office),
-                started + Duration::from_secs(2)
-            ),
+            guard.decide("cs2", Some("office"), started + Duration::from_secs(2)),
             SwitchDecision::Wait(Duration::from_secs(3))
         );
         assert_eq!(
-            guard.decide(
-                Environment::Cs2,
-                Some(Environment::Office),
-                started + PROFILE_APPLY_COOLDOWN
-            ),
+            guard.decide("cs2", Some("office"), started + PROFILE_APPLY_COOLDOWN),
             SwitchDecision::Apply
         );
     }

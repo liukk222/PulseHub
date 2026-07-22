@@ -164,6 +164,7 @@ mod tests {
         );
         let server = Server::bind(&path).unwrap();
         let snapshot = AgentSnapshot {
+            active_profile_name: None,
             device_status: DeviceStatus::Ready,
             active_environment: Environment::Cs2,
             config_revision: 9,
@@ -237,6 +238,7 @@ mod tests {
         );
         let server = Server::bind(&path).unwrap();
         let snapshot = AgentSnapshot {
+            active_profile_name: None,
             device_status: DeviceStatus::Ready,
             active_environment: Environment::Office,
             config_revision: 1,

@@ -2,6 +2,8 @@
 
 > 涵盖配置模型、持久化、校验、迁移以及 Named Pipe IPC 协议。
 
+每个 `ProfileConfig` 包含 DPI、四档 DPI、六个按键映射和固定四选一的 `report_rate_hz`。根配置另有 `shutdown_profile`；旧配置缺少这些字段时分别补为 `1000 Hz` 和原有安全退出默认值（`1600 DPI`、原生按键）。退出配置仍只由代理执行并回读验证。
+
 ## 9. 配置模型与持久化
 
 ### 9.1 文件位置
@@ -72,7 +74,19 @@ action = { kind = "logical_control", value = "mouse:forward" }
 [[profiles.cs2.button_mappings]]
 physical_control = "g102:side_forward"
 action = { kind = "logical_control", value = "mouse:back" }
+
+[[applications]]
+id = "winword"
+name = "WINWORD"
+executable_path = "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE"
+process_name = "WINWORD.EXE"
+
+[applications.profile]
+dpi = 800
+dpi_levels = [800, 1600, 2400, 3200]
 ~~~
+
+`applications` 可包含任意数量的独立应用环境；每项拥有完整 `ProfileConfig`（DPI、四档和六键映射）。`id`、名称与 `process_name` 均需全局唯一，进程名比较不区分大小写。旧 schema v1 文件没有该字段时按空列表加载，无需人工迁移。自动模式按前台进程选择；固定导入环境使用 `mode = "application"` 与 `fixed_application_id = "<id>"`，此时不随前台程序变化。
 
 `physical_control` 必须使用能力快照返回的 canonical ID，不能保存本地化展示名。若 POC 证实板载单键动作可用，其编码采用结构化 HID Usage，例如 `{ kind = "onboard_keyboard", usage_page = 0x07, usage = 0x1e, modifiers = 0x00 }`，不能使用有歧义的 `key:1` 字符串。
 

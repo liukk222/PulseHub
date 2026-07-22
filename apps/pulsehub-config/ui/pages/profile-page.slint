@@ -2,12 +2,15 @@ import { Theme } from "../theme.slint";
 import { MappingItem } from "../models.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Button, LineEdit } from "std-widgets.slint";
+import { I18n } from "../i18n.slint";
 
 export component ProfilePage inherits Rectangle {
     in property <string> profile-name;
     in property <int> dpi;
+    in property <int> report-rate: 1000;
     in property <[int]> dpi-options;
     in property <string> process-rule;
+    in property <string> description: "";
     in property <bool> editing-enabled: true;
     in property <[MappingItem]> mappings;
     in property <bool> dpi-cycle-enabled: false;
@@ -16,6 +19,7 @@ export component ProfilePage inherits Rectangle {
     in property <int> dpi-level-3: 2400;
     in property <int> dpi-level-4: 3200;
     callback dpi-changed(int);
+    callback report-rate-changed(int);
     callback custom-dpi-submitted(string);
     callback mapping-input-requested(int);
     callback mapping-restore-requested(int);
@@ -28,14 +32,31 @@ export component ProfilePage inherits Rectangle {
       content := VerticalLayout {
         width: parent.width - 14px;
         spacing: 20px;
-        Text { text: root.profile-name + " 配置"; color: Theme.ink; font-size: 26px; font-weight: 600; }
-        Text { text: root.profile-name == "CS2" ? "进入 " + root.process-rule + " 时自动使用此配置。" : "适合桌面、浏览器和办公软件。"; color: Theme.muted; font-size: 14px; }
+        Text { text: I18n.english ? root.profile-name + " profile" : root.profile-name + " 配置"; color: Theme.ink; font-size: 26px; font-weight: 600; }
+        Text { text: root.description != "" ? root.description : (I18n.english ? (root.process-rule != "" ? "Used when " + root.process-rule + " is in the foreground." : "For desktop, browsers, and office apps.") : (root.profile-name == "CS2" ? "进入 " + root.process-rule + " 时自动使用此配置。" : "适合桌面、浏览器和办公软件。")); color: Theme.muted; font-size: 14px; wrap: word-wrap; }
+        Rectangle {
+            background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: 120px;
+            VerticalLayout { padding: 20px; spacing: 12px;
+                Text { text: I18n.english ? "Report rate" : "鼠标回报率"; color: Theme.ink; font-size: 18px; font-weight: 600; }
+                Text { text: I18n.english ? "How often the mouse reports data to the computer." : "选择鼠标向计算机报告数据的频率。"; color: Theme.muted; font-size: 12px; }
+                HorizontalLayout { spacing: 8px;
+                    for rate in [1000, 500, 250, 125]: Rectangle {
+                        min-width: 100px; height: 40px; border-radius: 8px; border-width: 1px;
+                        border-color: root.report-rate == rate ? Theme.primary : Theme.hairline;
+                        background: root.report-rate == rate ? Theme.primary-soft : Theme.surface;
+                        Text { text: rate + " Hz"; color: Theme.ink; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea { enabled: root.editing-enabled; clicked => { root.report-rate-changed(rate); } }
+                    }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                }
+            }
+        }
         if !root.dpi-cycle-enabled: Rectangle {
             background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: 150px;
             VerticalLayout {
                 padding: 20px; spacing: 12px;
-                Text { text: "指针速度（DPI）"; color: Theme.ink; font-size: 14px; font-weight: 600; }
-                Text { text: "选项来自已识别设备能力"; color: Theme.muted; font-size: 12px; }
+                Text { text: I18n.english ? "Pointer speed (DPI)" : "指针速度（DPI）"; color: Theme.ink; font-size: 14px; font-weight: 600; }
+                Text { text: I18n.english ? "Options are based on detected device capabilities" : "选项来自已识别设备能力"; color: Theme.muted; font-size: 12px; }
                 HorizontalLayout {
                     spacing: 8px;
                     for value in root.dpi-options: Rectangle {
@@ -49,13 +70,13 @@ export component ProfilePage inherits Rectangle {
                 HorizontalLayout {
                     spacing: 8px;
                     custom-dpi := LineEdit {
-                        placeholder-text: "自行输入 DPI";
+                        placeholder-text: I18n.english ? "Enter DPI" : "自行输入 DPI";
                         input-type: InputType.number;
                         enabled: root.editing-enabled;
                         accepted(value) => { root.custom-dpi-submitted(value); }
                     }
                     Button {
-                        text: "确认";
+                        text: I18n.english ? "Confirm" : "确认";
                         enabled: root.editing-enabled;
                         clicked => { root.custom-dpi-submitted(custom-dpi.text); }
                     }
@@ -66,11 +87,11 @@ export component ProfilePage inherits Rectangle {
         if root.dpi-cycle-enabled: Rectangle {
             background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: 250px;
             VerticalLayout { padding: 20px; spacing: 8px;
-                Text { text: "DPI 切换键档位"; color: Theme.ink; font-size: 18px; font-weight: 600; }
-                Text { text: "G6 使用原本 DPI 切换功能时，在以下四档间循环；按 Enter 确认修改。"; color: Theme.muted; font-size: 12px; }
+                Text { text: I18n.english ? "DPI button levels" : "DPI 切换键档位"; color: Theme.ink; font-size: 18px; font-weight: 600; }
+                Text { text: I18n.english ? "When G6 uses its native DPI cycle, it cycles through these four levels. Press Enter to save." : "G6 使用原本 DPI 切换功能时，在以下四档间循环；按 Enter 确认修改。"; color: Theme.muted; font-size: 12px; }
                 for level[index] in [root.dpi-level-1, root.dpi-level-2, root.dpi-level-3, root.dpi-level-4]: HorizontalLayout {
                     spacing: 12px;
-                    Text { text: "档位 " + (index + 1); color: Theme.body; font-size: 14px; vertical-alignment: center; min-width: 70px; }
+                    Text { text: (I18n.english ? "Level " : "档位 ") + (index + 1); color: Theme.body; font-size: 14px; vertical-alignment: center; min-width: 70px; }
                     LineEdit {
                         text: level;
                         input-type: InputType.number;
@@ -85,8 +106,8 @@ export component ProfilePage inherits Rectangle {
         Rectangle {
             background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: 310px;
             VerticalLayout { padding: 20px; spacing: 10px;
-                Text { text: "按键映射"; color: Theme.ink; font-size: 18px; font-weight: 600; }
-                Text { text: "左键、右键受到安全保护"; color: Theme.muted; font-size: 12px; }
+                Text { text: I18n.english ? "Button mappings" : "按键映射"; color: Theme.ink; font-size: 18px; font-weight: 600; }
+                Text { text: I18n.english ? "Primary and secondary clicks are protected" : "左键、右键受到安全保护"; color: Theme.muted; font-size: 12px; }
                 for mapping[index] in root.mappings: Rectangle {
                     height: 40px; border-color: Theme.hairline; border-width: 1px; border-radius: 8px;
                     background: mapping.locked ? Theme.surface-soft : Theme.surface;
@@ -94,9 +115,9 @@ export component ProfilePage inherits Rectangle {
                         Text { text: mapping.label; color: Theme.ink; font-size: 14px; vertical-alignment: center; min-width: 150px; }
                         Rectangle { horizontal-stretch: 1; background: transparent; }
                         Text { text: mapping.action-label; color: mapping.locked ? Theme.muted : Theme.primary; font-size: 14px; vertical-alignment: center; }
-                        if mapping.locked: Text { text: "已保护"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
-                        if !mapping.locked: Button { text: "输入按键组合"; enabled: root.editing-enabled; clicked => { root.mapping-input-requested(index); } }
-                        if !mapping.locked: Button { text: "还原按键"; enabled: root.editing-enabled; clicked => { root.mapping-restore-requested(index); } }
+                        if mapping.locked: Text { text: I18n.english ? "Protected" : "已保护"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                        if !mapping.locked: Button { text: I18n.english ? "Enter shortcut" : "输入按键组合"; enabled: root.editing-enabled; clicked => { root.mapping-input-requested(index); } }
+                        if !mapping.locked: Button { text: I18n.english ? "Restore button" : "还原按键"; enabled: root.editing-enabled; clicked => { root.mapping-restore-requested(index); } }
                     }
                 }
             }

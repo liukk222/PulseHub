@@ -1,25 +1,28 @@
-import { Button } from "std-widgets.slint";
+import { Button, LineEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { OverviewPage } from "pages/overview-page.slint";
 import { ProfilePage } from "pages/profile-page.slint";
 import { SettingsPage } from "pages/settings-page.slint";
-import { MappingItem } from "models.slint";
+import { MappingItem, ApplicationProfileItem } from "models.slint";
+import { I18n } from "i18n.slint";
 
 export component AppTray inherits SystemTrayIcon {
+    in property <bool> english: false;
     icon: @image-url("assets/tray-icon.svg");
     tooltip: "PulseHub";
     callback open-requested();
     callback quit-requested();
     clicked => { root.open-requested(); }
     Menu {
-        MenuItem { title: "打开 PulseHub"; activated => { root.open-requested(); } }
+        MenuItem { title: root.english ? "Open PulseHub" : "打开 PulseHub"; activated => { root.open-requested(); } }
         MenuSeparator { }
-        MenuItem { title: "退出托盘"; activated => { root.quit-requested(); } }
+        MenuItem { title: root.english ? "Exit PulseHub" : "退出托盘"; activated => { root.quit-requested(); } }
     }
 }
 
 export component AppWindow inherits Window {
     title: "PulseHub";
+    icon: @image-url("assets/tray-icon.svg");
     preferred-width: 960px; preferred-height: 680px; min-width: 800px; min-height: 600px;
     background: Theme.canvas;
     in-out property <int> selected-page: 0;
@@ -32,7 +35,7 @@ export component AppWindow inherits Window {
     in-out property <string> shutdown-title: "正在安全退出";
     in-out property <string> shutdown-detail: "正在还原鼠标，请勿断开设备。";
     in-out property <bool> mapping-editor-visible: false;
-    in-out property <bool> mapping-editor-office: true;
+    in-out property <int> mapping-editor-kind: 0;
     in-out property <int> mapping-editor-index: -1;
     in-out property <string> mapping-editor-label: "";
     in-out property <string> captured-key: "";
@@ -43,6 +46,8 @@ export component AppWindow inherits Window {
     in-out property <bool> captured-meta: false;
     in-out property <int> office-dpi: 3200;
     in-out property <int> cs2-dpi: 100;
+    in-out property <int> office-report-rate: 1000;
+    in-out property <int> cs2-report-rate: 1000;
     in-out property <int> office-dpi-level-1: 800;
     in-out property <int> office-dpi-level-2: 1600;
     in-out property <int> office-dpi-level-3: 2400;
@@ -59,11 +64,38 @@ export component AppWindow inherits Window {
     in property <int> dpi-step: 1;
     in property <[MappingItem]> office-mappings;
     in property <[MappingItem]> cs2-mappings;
-    in-out property <string> selection-mode: "自动";
+    in-out property <int> shutdown-dpi: 1600;
+    in-out property <int> shutdown-report-rate: 1000;
+    in-out property <int> shutdown-dpi-level-1: 800;
+    in-out property <int> shutdown-dpi-level-2: 1600;
+    in-out property <int> shutdown-dpi-level-3: 2400;
+    in-out property <int> shutdown-dpi-level-4: 3200;
+    in-out property <bool> shutdown-dpi-cycle-enabled: true;
+    in property <[MappingItem]> shutdown-mappings;
+    in-out property <string> application-profiles-json: "[]";
+    in property <[ApplicationProfileItem]> application-profile-items;
+    in-out property <int> selected-application-index: -1;
+    in-out property <string> import-executable-path: "";
+    in-out property <string> custom-profile-name: "应用环境";
+    in-out property <string> custom-process-rule: "";
+    in-out property <int> custom-dpi: 1600;
+    in-out property <int> custom-report-rate: 1000;
+    in-out property <int> custom-dpi-level-1: 800;
+    in-out property <int> custom-dpi-level-2: 1600;
+    in-out property <int> custom-dpi-level-3: 2400;
+    in-out property <int> custom-dpi-level-4: 3200;
+    in-out property <bool> custom-dpi-cycle-enabled: false;
+    in property <[MappingItem]> custom-mappings;
+    in-out property <string> selection-mode: "自动模式";
+    in property <[string]> mode-options;
     in-out property <bool> start-with-windows: true;
     in-out property <bool> developer-logging: false;
+    in-out property <string> language: "简体中文";
     in property <string> integration-status: "未知";
-    in property <string> connection-text: "正在连接代理";
+    in property <string> connection-text: "正在检测设备";
+    in property <bool> english: root.language == "English";
+    init => { I18n.english = root.english; }
+    changed language => { I18n.english = root.english; }
     in property <string> device-status: "正在连接设备";
     in property <string> environment-name: "—";
     in property <string> current-dpi: "—";
@@ -73,16 +105,19 @@ export component AppWindow inherits Window {
     in property <string> save-title: "正在读取配置";
     in property <string> save-detail: "连接代理后将显示保存和应用状态。";
     callback refresh-requested();
-    callback save-requested(int, int, int, string, bool, bool);
+    callback save-requested(int, int, int, string, bool, bool, string);
     callback discard-requested();
-    callback mapping-restore-requested(bool, int);
-    callback mapping-key-requested(bool, int, string, bool, bool, bool, bool);
-    callback custom-dpi-requested(bool, string);
-    callback dpi-level-requested(bool, int, string);
+    callback mapping-restore-requested(int, int);
+    callback mapping-key-requested(int, int, string, bool, bool, bool, bool);
+    callback custom-dpi-requested(int, string);
+    callback dpi-level-requested(int, int, string);
+    callback import-application-requested(string);
+    callback application-selected(int);
     callback discard-and-close-requested();
     callback retry-apply-requested();
     callback retry-shutdown-requested();
     callback force-shutdown-requested();
+    callback open-project-requested();
 
     VerticalLayout {
         spacing: 0px;
@@ -92,7 +127,7 @@ export component AppWindow inherits Window {
                 Text { text: "PulseHub"; color: Theme.ink; font-size: 20px; font-weight: 600; vertical-alignment: center; }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
                 Text { text: root.connection-text; color: Theme.body; font-size: 12px; vertical-alignment: center; }
-                Button { text: "刷新"; enabled: !root.busy; clicked => { root.refresh-requested(); } }
+                Button { text: root.english ? "Refresh" : "刷新"; enabled: !root.busy; clicked => { root.refresh-requested(); } }
             }
         }
         HorizontalLayout {
@@ -100,38 +135,66 @@ export component AppWindow inherits Window {
             Rectangle {
                 width: 184px; background: Theme.surface-soft;
                 VerticalLayout { padding: 16px; spacing: 8px;
-                    for item[index] in ["设备概览", "Office 配置", "CS2 配置", "设置"]: Rectangle {
+                    for item[index] in root.english ? ["Device overview", "Office profile", "CS2 profile", "Settings"] : ["设备概览", "Office 配置", "CS2 配置", "设置"]: Rectangle {
                         height: 44px; border-radius: 8px; background: root.selected-page == index ? Theme.primary-soft : transparent;
                         Text { text: item; color: root.selected-page == index ? Theme.primary : Theme.body; font-size: 14px; vertical-alignment: center; x: 12px; }
                         TouchArea { clicked => { root.selected-page = index; } }
+                    }
+                    Rectangle {
+                        height: 44px; border-radius: 8px; background: root.selected-page == 4 ? Theme.primary-soft : transparent;
+                        Text { text: root.english ? "App profiles" : "应用环境"; color: root.selected-page == 4 ? Theme.primary : Theme.body; font-size: 14px; vertical-alignment: center; x: 12px; }
+                        TouchArea { clicked => { root.selected-page = 4; } }
+                    }
+                    Rectangle {
+                        height: 44px; border-radius: 8px; background: root.selected-page == 5 ? Theme.primary-soft : transparent;
+                        Text { text: root.english ? "Exit profile" : "退出配置"; color: root.selected-page == 5 ? Theme.primary : Theme.body; font-size: 14px; vertical-alignment: center; x: 12px; }
+                        TouchArea { clicked => { root.selected-page = 5; } }
                     }
                     Rectangle { vertical-stretch: 1; background: transparent; }
                 }
             }
             Rectangle {
                 horizontal-stretch: 1; background: Theme.canvas;
-                if root.selected-page == 0: OverviewPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; device-status: root.device-status; environment-name: root.environment-name; current-dpi: root.current-dpi; apply-title: root.save-title; apply-detail: root.save-detail; apply-enabled: !root.busy && !root.draft-dirty; retry-apply-requested => { root.retry-apply-requested(); } }
-                if root.selected-page == 1: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "Office"; dpi: root.office-dpi; dpi-options: root.dpi-options; mappings: root.office-mappings; dpi-cycle-enabled: root.office-dpi-cycle-enabled; dpi-level-1: root.office-dpi-level-1; dpi-level-2: root.office-dpi-level-2; dpi-level-3: root.office-dpi-level-3; dpi-level-4: root.office-dpi-level-4; process-rule: ""; editing-enabled: !root.busy; dpi-changed(value) => { root.office-dpi = value; root.draft-dirty = true; } custom-dpi-submitted(value) => { root.custom-dpi-requested(true, value); } dpi-level-submitted(index, value) => { root.dpi-level-requested(true, index, value); } mapping-input-requested(index) => { root.open-mapping-capture(true, index); } mapping-restore-requested(index) => { root.mapping-restore-requested(true, index); } }
-                if root.selected-page == 2: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "CS2"; dpi: root.cs2-dpi; dpi-options: root.dpi-options; mappings: root.cs2-mappings; dpi-cycle-enabled: root.cs2-dpi-cycle-enabled; dpi-level-1: root.cs2-dpi-level-1; dpi-level-2: root.cs2-dpi-level-2; dpi-level-3: root.cs2-dpi-level-3; dpi-level-4: root.cs2-dpi-level-4; process-rule: "cs2.exe"; editing-enabled: !root.busy; dpi-changed(value) => { root.cs2-dpi = value; root.draft-dirty = true; } custom-dpi-submitted(value) => { root.custom-dpi-requested(false, value); } dpi-level-submitted(index, value) => { root.dpi-level-requested(false, index, value); } mapping-input-requested(index) => { root.open-mapping-capture(false, index); } mapping-restore-requested(index) => { root.mapping-restore-requested(false, index); } }
-                if root.selected-page == 3: SettingsPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; revision: root.revision; selection-mode: root.selection-mode; start-with-windows: root.start-with-windows; developer-logging: root.developer-logging; integration-status: root.integration-status; editing-enabled: !root.busy; selection-mode-cycle => { root.selection-mode = root.selection-mode == "自动" ? "固定 Office" : root.selection-mode == "固定 Office" ? "固定 CS2" : "自动"; root.draft-dirty = true; } start-with-windows-toggle => { root.start-with-windows = !root.start-with-windows; root.draft-dirty = true; } developer-logging-toggle => { root.developer-logging = !root.developer-logging; root.draft-dirty = true; } }
+                if root.selected-page == 0: OverviewPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; device-status: root.device-status; environment-name: root.environment-name; current-dpi: root.current-dpi; apply-title: root.save-title; apply-detail: root.save-detail; apply-enabled: !root.busy && !root.draft-dirty; retry-apply-requested => { root.retry-apply-requested(); } open-project-requested => { root.open-project-requested(); } }
+                if root.selected-page == 1: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "Office"; dpi: root.office-dpi; report-rate: root.office-report-rate; dpi-options: root.dpi-options; mappings: root.office-mappings; dpi-cycle-enabled: root.office-dpi-cycle-enabled; dpi-level-1: root.office-dpi-level-1; dpi-level-2: root.office-dpi-level-2; dpi-level-3: root.office-dpi-level-3; dpi-level-4: root.office-dpi-level-4; process-rule: ""; editing-enabled: !root.busy; dpi-changed(value) => { root.office-dpi = value; root.draft-dirty = true; } report-rate-changed(value) => { root.office-report-rate = value; root.draft-dirty = true; } custom-dpi-submitted(value) => { root.custom-dpi-requested(0, value); } dpi-level-submitted(index, value) => { root.dpi-level-requested(0, index, value); } mapping-input-requested(index) => { root.open-mapping-capture(0, index); } mapping-restore-requested(index) => { root.mapping-restore-requested(0, index); } }
+                if root.selected-page == 2: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "CS2"; dpi: root.cs2-dpi; report-rate: root.cs2-report-rate; dpi-options: root.dpi-options; mappings: root.cs2-mappings; dpi-cycle-enabled: root.cs2-dpi-cycle-enabled; dpi-level-1: root.cs2-dpi-level-1; dpi-level-2: root.cs2-dpi-level-2; dpi-level-3: root.cs2-dpi-level-3; dpi-level-4: root.cs2-dpi-level-4; process-rule: "cs2.exe"; editing-enabled: !root.busy; dpi-changed(value) => { root.cs2-dpi = value; root.draft-dirty = true; } report-rate-changed(value) => { root.cs2-report-rate = value; root.draft-dirty = true; } custom-dpi-submitted(value) => { root.custom-dpi-requested(1, value); } dpi-level-submitted(index, value) => { root.dpi-level-requested(1, index, value); } mapping-input-requested(index) => { root.open-mapping-capture(1, index); } mapping-restore-requested(index) => { root.mapping-restore-requested(1, index); } }
+                if root.selected-page == 3: SettingsPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; revision: root.revision; selection-mode: root.selection-mode; mode-options: root.mode-options; start-with-windows: root.start-with-windows; developer-logging: root.developer-logging; language: root.language; integration-status: root.integration-status; editing-enabled: !root.busy; selection-mode-selected(value) => { root.selection-mode = value; root.draft-dirty = true; } start-with-windows-toggle => { root.start-with-windows = !root.start-with-windows; root.draft-dirty = true; } developer-logging-toggle => { root.developer-logging = !root.developer-logging; root.draft-dirty = true; } language-selected(value) => { root.language = value; root.draft-dirty = true; } }
+                if root.selected-page == 4: Rectangle {
+                    x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; background: transparent;
+                    VerticalLayout { spacing: 12px;
+                        Text { text: root.english ? "App profiles" : "应用环境"; color: Theme.ink; font-size: 26px; font-weight: 600; }
+                        Text { text: root.english ? "Import an EXE to use an independent profile when it is in the foreground." : "导入 EXE 后，自动模式会在该程序成为前台时使用独立配置。"; color: Theme.muted; font-size: 14px; }
+                        HorizontalLayout { spacing: 8px;
+                            import-path := LineEdit { text <=> root.import-executable-path; placeholder-text: root.english ? "Enter the full EXE path, e.g. C:\\...\\WINWORD.EXE" : "输入程序完整路径，例如 C:\\...\\WINWORD.EXE"; enabled: !root.busy; accepted(value) => { root.import-application-requested(value); } }
+                            Button { text: root.english ? "Import program" : "导入程序"; enabled: !root.busy; clicked => { root.import-application-requested(import-path.text); } }
+                        }
+                        HorizontalLayout { spacing: 8px;
+                            for app[index] in root.application-profile-items: Button { text: app.name; primary: root.selected-application-index == index; enabled: !root.busy; clicked => { root.application-selected(index); } }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
+                        if root.selected-application-index < 0: Text { text: root.english ? "No app profile has been imported." : "尚未导入应用环境。"; color: Theme.muted; font-size: 14px; }
+                        if root.selected-application-index >= 0: ProfilePage { vertical-stretch: 1; profile-name: root.custom-profile-name; dpi: root.custom-dpi; report-rate: root.custom-report-rate; dpi-options: root.dpi-options; mappings: root.custom-mappings; dpi-cycle-enabled: root.custom-dpi-cycle-enabled; dpi-level-1: root.custom-dpi-level-1; dpi-level-2: root.custom-dpi-level-2; dpi-level-3: root.custom-dpi-level-3; dpi-level-4: root.custom-dpi-level-4; process-rule: root.custom-process-rule; editing-enabled: !root.busy; dpi-changed(value) => { root.custom-dpi = value; root.draft-dirty = true; } report-rate-changed(value) => { root.custom-report-rate = value; root.draft-dirty = true; } custom-dpi-submitted(value) => { root.custom-dpi-requested(2, value); } dpi-level-submitted(index, value) => { root.dpi-level-requested(2, index, value); } mapping-input-requested(index) => { root.open-mapping-capture(2, index); } mapping-restore-requested(index) => { root.mapping-restore-requested(2, index); } }
+                    }
+                }
+                if root.selected-page == 5: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: root.english ? "Exit" : "退出"; process-rule: ""; description: root.english ? "Choose the settings that remain on the mouse after PulseHub exits." : "这里设置 PulseHub 退出后保留在鼠标上的配置。"; dpi: root.shutdown-dpi; report-rate: root.shutdown-report-rate; dpi-options: root.dpi-options; mappings: root.shutdown-mappings; dpi-cycle-enabled: root.shutdown-dpi-cycle-enabled; dpi-level-1: root.shutdown-dpi-level-1; dpi-level-2: root.shutdown-dpi-level-2; dpi-level-3: root.shutdown-dpi-level-3; dpi-level-4: root.shutdown-dpi-level-4; editing-enabled: !root.busy; dpi-changed(value) => { root.shutdown-dpi = value; root.draft-dirty = true; } report-rate-changed(value) => { root.shutdown-report-rate = value; root.draft-dirty = true; } custom-dpi-submitted(value) => { root.custom-dpi-requested(3, value); } dpi-level-submitted(index, value) => { root.dpi-level-requested(3, index, value); } mapping-input-requested(index) => { root.open-mapping-capture(3, index); } mapping-restore-requested(index) => { root.mapping-restore-requested(3, index); } }
             }
         }
         if root.draft-dirty: Rectangle {
             height: 72px; background: Theme.surface; border-color: Theme.hairline; border-width: 1px;
             HorizontalLayout { padding-left: 24px; padding-right: 24px; spacing: 12px;
-                VerticalLayout { Text { text: "有未保存的更改"; color: Theme.ink; font-size: 14px; font-weight: 600; } Text { text: "保存后才会发送给代理；应用状态将单独更新。"; color: Theme.muted; font-size: 12px; } }
+                VerticalLayout { Text { text: root.english ? "Unsaved changes" : "有未保存的更改"; color: Theme.ink; font-size: 14px; font-weight: 600; } Text { text: root.english ? "Changes are sent to the agent after saving; apply status updates separately." : "保存后才会发送给代理；应用状态将单独更新。"; color: Theme.muted; font-size: 12px; } }
                 Rectangle { horizontal-stretch: 1; background: transparent; }
-                Button { text: "放弃更改"; enabled: !root.busy; clicked => { root.discard-requested(); } }
-                Button { text: root.busy ? "正在保存" : "保存配置"; primary: true; enabled: !root.busy; clicked => { root.save-requested(root.office-dpi, root.cs2-dpi, root.base-revision, root.selection-mode, root.start-with-windows, root.developer-logging); } }
+                Button { text: root.english ? "Discard" : "放弃更改"; enabled: !root.busy; clicked => { root.discard-requested(); } }
+                Button { text: root.busy ? (root.english ? "Saving" : "正在保存") : (root.english ? "Save" : "保存配置"); primary: true; enabled: !root.busy; clicked => { root.save-requested(root.office-dpi, root.cs2-dpi, root.base-revision, root.selection-mode, root.start-with-windows, root.developer-logging, root.language); } }
             }
         }
     }
-    function open-mapping-capture(office: bool, index: int) {
-        root.mapping-editor-office = office;
+    function open-mapping-capture(kind: int, index: int) {
+        root.mapping-editor-kind = kind;
         root.mapping-editor-index = index;
-        root.mapping-editor-label = office ? root.office-mappings[index].label : root.cs2-mappings[index].label;
+        root.mapping-editor-label = kind == 0 ? root.office-mappings[index].label : kind == 1 ? root.cs2-mappings[index].label : kind == 2 ? root.custom-mappings[index].label : root.shutdown-mappings[index].label;
         root.captured-key = "";
-        root.captured-preview = "尚未输入";
+        root.captured-preview = root.english ? "No input" : "尚未输入";
         root.mapping-editor-visible = true;
     }
     if root.mapping-editor-visible: Rectangle {
@@ -141,10 +204,10 @@ export component AppWindow inherits Window {
             x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px;
             VerticalLayout { padding: 24px; spacing: 16px;
-                Text { text: "更改 " + root.mapping-editor-label; color: Theme.ink; font-size: 18px; font-weight: 600; }
+                Text { text: (root.english ? "Change " : "更改 ") + root.mapping-editor-label; color: Theme.ink; font-size: 18px; font-weight: 600; }
                 VerticalLayout {
                     spacing: 12px;
-                    Text { text: "请按一个按键或组合键，然后按 Enter 保存"; color: Theme.body; font-size: 14px; }
+                    Text { text: root.english ? "Press a key or shortcut, then press Enter to save" : "请按一个按键或组合键，然后按 Enter 保存"; color: Theme.body; font-size: 14px; }
                     Rectangle {
                         height: 64px; border-color: Theme.primary; border-width: 2px; border-radius: 8px; background: Theme.primary-soft;
                         Text { text: root.captured-preview; color: Theme.ink; font-size: 18px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
@@ -154,7 +217,7 @@ export component AppWindow inherits Window {
                                 if (event.text == Key.Escape) { root.mapping-editor-visible = false; return accept; }
                                 if (event.text == Key.Return) {
                                     if (root.captured-key != "") {
-                                        root.mapping-key-requested(root.mapping-editor-office, root.mapping-editor-index, root.captured-key, root.captured-control, root.captured-shift, root.captured-alt, root.captured-meta);
+                                        root.mapping-key-requested(root.mapping-editor-kind, root.mapping-editor-index, root.captured-key, root.captured-control, root.captured-shift, root.captured-alt, root.captured-meta);
                                         root.mapping-editor-visible = false;
                                     }
                                     return accept;
@@ -170,10 +233,10 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
-                    Text { text: "Esc 取消；每个映射支持修饰键加一个主键。"; color: Theme.muted; font-size: 12px; }
+                    Text { text: root.english ? "Esc cancels. Each mapping supports modifiers plus one main key." : "Esc 取消；每个映射支持修饰键加一个主键。"; color: Theme.muted; font-size: 12px; }
                 }
                 Rectangle { vertical-stretch: 1; background: transparent; }
-                Button { text: "取消"; clicked => { root.mapping-editor-visible = false; } }
+                Button { text: root.english ? "Cancel" : "取消"; clicked => { root.mapping-editor-visible = false; } }
             }
         }
     }
@@ -184,14 +247,14 @@ export component AppWindow inherits Window {
             width: 460px; height: 230px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px;
             VerticalLayout { padding: 24px; spacing: 16px;
-                Text { text: "保存更改后关闭？"; color: Theme.ink; font-size: 18px; font-weight: 600; }
-                Text { text: "Office 和 CS2 共用一个待提交草稿。关闭前可以保存，也可以明确放弃本次更改。"; color: Theme.body; font-size: 14px; wrap: word-wrap; }
+                Text { text: root.english ? "Save changes before closing?" : "保存更改后关闭？"; color: Theme.ink; font-size: 18px; font-weight: 600; }
+                Text { text: root.english ? "All profiles share one pending draft. Save or explicitly discard it before closing." : "所有环境共用一个待提交草稿。关闭前可以保存，也可以明确放弃本次更改。"; color: Theme.body; font-size: 14px; wrap: word-wrap; }
                 Rectangle { vertical-stretch: 1; background: transparent; }
                 HorizontalLayout { spacing: 10px;
-                    Button { text: "取消"; clicked => { root.close-dialog-visible = false; root.quit-after-close = false; } }
+                    Button { text: root.english ? "Cancel" : "取消"; clicked => { root.close-dialog-visible = false; root.quit-after-close = false; } }
                     Rectangle { horizontal-stretch: 1; background: transparent; }
-                    Button { text: "放弃更改"; clicked => { root.close-dialog-visible = false; root.discard-and-close-requested(); } }
-                    Button { text: "保存并关闭"; primary: true; enabled: !root.busy; clicked => { root.close-dialog-visible = false; root.close-after-save = true; root.save-requested(root.office-dpi, root.cs2-dpi, root.base-revision, root.selection-mode, root.start-with-windows, root.developer-logging); } }
+                    Button { text: root.english ? "Discard" : "放弃更改"; clicked => { root.close-dialog-visible = false; root.discard-and-close-requested(); } }
+                    Button { text: root.english ? "Save and close" : "保存并关闭"; primary: true; enabled: !root.busy; clicked => { root.close-dialog-visible = false; root.close-after-save = true; root.save-requested(root.office-dpi, root.cs2-dpi, root.base-revision, root.selection-mode, root.start-with-windows, root.developer-logging, root.language); } }
                 }
             }
         }
@@ -208,9 +271,9 @@ export component AppWindow inherits Window {
                 Rectangle { vertical-stretch: 1; background: transparent; }
                 if !root.busy: HorizontalLayout {
                     spacing: 10px;
-                    Button { text: "仍然退出"; clicked => { root.force-shutdown-requested(); } }
+                    Button { text: root.english ? "Exit anyway" : "仍然退出"; clicked => { root.force-shutdown-requested(); } }
                     Rectangle { horizontal-stretch: 1; background: transparent; }
-                    Button { text: "重试恢复"; primary: true; clicked => { root.retry-shutdown-requested(); } }
+                    Button { text: root.english ? "Retry restore" : "重试恢复"; primary: true; clicked => { root.retry-shutdown-requested(); } }
                 }
             }
         }

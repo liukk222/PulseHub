@@ -2,6 +2,7 @@ import { Theme } from "../theme.slint";
 import { DeviceCard } from "../components/device-card.slint";
 import { StatusBanner } from "../components/status-banner.slint";
 import { Button } from "std-widgets.slint";
+import { I18n } from "../i18n.slint";
 
 export component OverviewPage inherits Rectangle {
     in property <string> device-status;
@@ -11,16 +12,26 @@ export component OverviewPage inherits Rectangle {
     in property <string> apply-detail;
     in property <bool> apply-enabled: true;
     callback retry-apply-requested();
+    callback open-project-requested();
     background: transparent;
     VerticalLayout {
         spacing: 20px;
-        Text { text: "设备概览"; color: Theme.ink; font-size: 26px; font-weight: 600; }
-        Text { text: "查看设备连接、当前环境以及配置应用状态。"; color: Theme.muted; font-size: 14px; }
+        Text { text: I18n.english ? "Device overview" : "设备概览"; color: Theme.ink; font-size: 26px; font-weight: 600; }
+        Text { text: I18n.english ? "View device connection, active profile, and apply status." : "查看设备连接、当前环境以及配置应用状态。"; color: Theme.muted; font-size: 14px; }
+        Rectangle {
+            height: 40px; background: transparent;
+            HorizontalLayout { spacing: 8px;
+                Text { text: I18n.english ? "Project:" : "项目地址："; color: Theme.muted; vertical-alignment: center; }
+                Text { text: "github.com/liukk222/PulseHub"; color: Theme.primary; vertical-alignment: center; }
+                TouchArea { clicked => { root.open-project-requested(); } }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+            }
+        }
         DeviceCard { status-text: root.device-status; environment-text: root.environment-name; current-dpi: root.current-dpi; }
         StatusBanner { title: root.apply-title; detail: root.apply-detail; }
         HorizontalLayout {
             Rectangle { horizontal-stretch: 1; background: transparent; }
-            Button { text: "重新应用"; primary: true; enabled: root.apply-enabled; clicked => { root.retry-apply-requested(); } }
+            Button { text: I18n.english ? "Apply again" : "重新应用"; primary: true; enabled: root.apply-enabled; clicked => { root.retry-apply-requested(); } }
         }
         Rectangle { vertical-stretch: 1; background: transparent; }
     }

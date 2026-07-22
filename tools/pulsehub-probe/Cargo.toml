@@ -11,4 +11,3 @@ pulsehub-device = { path = "../../crates/pulsehub-device" }
 
 [lints]
 workspace = true
-

@@ -1,0 +1,21 @@
+PulseHub 第三方与兼容性研究声明 / Third-Party and Compatibility Research Notices
+版本 / Version: 2026-07-23
+
+Logitech
+--------
+Logitech、G102 LIGHTSYNC 及相关标识归其各自权利人所有。PulseHub 是独立项目，与 Logitech 无隶属、授权或背书关系。
+
+Logitech, G102 LIGHTSYNC, and related marks belong to their respective owners. PulseHub is an independent project and is not affiliated with, authorized by, or endorsed by Logitech.
+
+libratbag
+----------
+libratbag 是逆向协议的开源实现，可用于兼容性研究和测试交叉验证，但不是 Logitech 对 PulseHub 的稳定协议承诺。引用或移植代码前必须核对其许可证并保留要求的声明。
+
+libratbag is an open-source implementation of reverse-engineered protocols. It may be used for compatibility research and cross-validation in testing, but it is not a stability commitment from Logitech to PulseHub. Before quoting or porting code, its license must be reviewed and all required notices must be retained.
+
+Reference / 参考：
+https://github.com/libratbag/libratbag
+
+本安装包不宣称 libratbag、Logitech 或其他第三方对 PulseHub 作出兼容性、稳定性或安全性保证。
+
+This installer does not claim that libratbag, Logitech, or any other third party guarantees PulseHub compatibility, stability, or safety.

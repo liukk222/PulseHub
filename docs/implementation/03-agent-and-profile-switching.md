@@ -103,7 +103,9 @@ stateDiagram-v2
 2. 用 `GetWindowThreadProcessId` 获取 PID。
 3. 用 `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` 打开进程。
 4. 用 `QueryFullProcessImageNameW` 获取规范化路径。
-5. 按不区分大小写的文件名匹配 `cs2.exe`；配置可选精确路径约束。
+5. 自动模式先按不区分大小写的文件名匹配 `applications` 中导入的应用环境，再匹配内置 `cs2.exe` 规则；其余程序回落 Office。
+
+导入项以稳定 `application:<id>` 作为切换状态键，因此三个或更多环境之间切换时不会把不同自定义环境合并为同一个 `Custom` 状态。完整 EXE 路径用于配置展示和导入审计，运行时使用前台进程文件名匹配，以兼容应用升级后安装目录变化。导入环境既可参与自动模式，也可通过 `selection.mode = "application"` 和 `fixed_application_id` 设为固定模式。
 
 目标是“CS2 位于前台”而不是“系统中存在 CS2 进程”。无法读取进程信息时保留上一稳定环境，并记录短期诊断状态，不应立刻反复切换。
 

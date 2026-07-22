@@ -140,6 +140,7 @@ pub enum SelectionMode {
 pub enum Environment {
     Office,
     Cs2,
+    Custom,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +178,8 @@ pub struct AgentSnapshot {
     pub config_revision: u64,
     pub current_dpi: Option<u16>,
     pub desired_dpi: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_profile_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dpi_capability: Option<DpiCapability>,
     #[serde(default = "default_integration_status")]
@@ -619,6 +622,7 @@ mod tests {
     #[test]
     fn dispatcher_negotiates_and_returns_snapshot() {
         let snapshot = AgentSnapshot {
+            active_profile_name: None,
             device_status: DeviceStatus::Ready,
             active_environment: Environment::Office,
             config_revision: 3,
@@ -646,6 +650,7 @@ mod tests {
     #[test]
     fn dispatcher_rejects_snapshot_before_hello() {
         let snapshot = AgentSnapshot {
+            active_profile_name: None,
             device_status: DeviceStatus::Unknown,
             active_environment: Environment::Office,
             config_revision: 0,

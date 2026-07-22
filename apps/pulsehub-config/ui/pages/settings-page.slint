@@ -1,53 +1,106 @@
 import { Theme } from "../theme.slint";
+import { AboutSlint, ScrollView } from "std-widgets.slint";
 export component SettingsPage inherits Rectangle {
     in property <string> revision;
     in property <string> selection-mode;
+    in property <[string]> mode-options;
     in property <bool> start-with-windows;
     in property <bool> developer-logging;
+    in property <string> language;
+    in property <bool> english: root.language == "English";
     in property <bool> editing-enabled: true;
     in property <string> integration-status;
-    callback selection-mode-cycle();
+    in-out property <bool> mode-menu-open: false;
+    in-out property <bool> language-menu-open: false;
+    callback selection-mode-selected(string);
     callback start-with-windows-toggle();
     callback developer-logging-toggle();
+    callback language-selected(string);
     background: transparent;
-    VerticalLayout {
-        spacing: 20px;
-        Text { text: "设置"; color: Theme.ink; font-size: 26px; font-weight: 600; }
-        Text { text: "代理行为、环境选择与诊断信息。"; color: Theme.muted; font-size: 14px; }
-        Rectangle { background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: 260px;
+    ScrollView {
+      viewport-width: self.width;
+      viewport-height: content.preferred-height;
+      horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+      content := VerticalLayout {
+        width: parent.width - 14px; spacing: 20px;
+        Text { text: root.english ? "Settings" : "设置"; color: Theme.ink; font-size: 26px; font-weight: 600; }
+        Text { text: root.english ? "Startup, mode selection, and diagnostics." : "代理行为、模式选择与诊断信息。"; color: Theme.muted; font-size: 14px; }
+        Rectangle { background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: (root.mode-menu-open ? 470px : 350px) + (root.language-menu-open ? 90px : 0px) + 150px;
             VerticalLayout { padding: 20px; spacing: 14px;
                 Rectangle { height: 44px; border-color: Theme.hairline; border-width: 1px; border-radius: 8px; background: Theme.surface;
                     HorizontalLayout { padding-left: 12px; padding-right: 12px;
-                        Text { text: "登录 Windows 时启动代理"; color: Theme.ink; font-size: 14px; vertical-alignment: center; }
+                        Text { text: root.english ? "Start at sign-in" : "登录时启动"; color: Theme.ink; font-size: 14px; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; background: transparent; }
-                        Text { text: root.start-with-windows ? "已启用" : "未启用"; color: Theme.primary; font-size: 14px; vertical-alignment: center; }
-                        Text { text: "点击切换"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                        Text { text: root.start-with-windows ? (root.english ? "Enabled" : "已启用") : (root.english ? "Disabled" : "未启用"); color: Theme.primary; font-size: 14px; vertical-alignment: center; }
+                        Text { text: root.english ? "Click to toggle" : "点击切换"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
                     }
                     TouchArea { enabled: root.editing-enabled; clicked => { root.start-with-windows-toggle(); } }
                 }
-                Text { text: "系统集成：" + root.integration-status; color: Theme.muted; font-size: 12px; }
+                Text { text: (root.english ? "System integration: " : "系统集成：") + root.integration-status; color: Theme.muted; font-size: 12px; }
                 Rectangle { height: 44px; border-color: Theme.hairline; border-width: 1px; border-radius: 8px; background: Theme.surface;
                     HorizontalLayout { padding-left: 12px; padding-right: 12px;
-                        Text { text: "开发者日志"; color: Theme.ink; font-size: 14px; vertical-alignment: center; }
+                        Text { text: root.english ? "Developer logs" : "开发者日志"; color: Theme.ink; font-size: 14px; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; background: transparent; }
-                        Text { text: root.developer-logging ? "已开启" : "已关闭"; color: Theme.primary; font-size: 14px; vertical-alignment: center; }
-                        Text { text: "点击切换"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                        Text { text: root.developer-logging ? (root.english ? "On" : "已开启") : (root.english ? "Off" : "已关闭"); color: Theme.primary; font-size: 14px; vertical-alignment: center; }
+                        Text { text: root.english ? "Click to toggle" : "点击切换"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
                     }
                     TouchArea { enabled: root.editing-enabled; clicked => { root.developer-logging-toggle(); } }
                 }
-                Text { text: "开启后记录环境切换、DPI、板载写入及失败原因；默认关闭。"; color: Theme.muted; font-size: 12px; }
+                Text { text: root.english ? "Records profile switches, DPI, onboard writes, and failures. Off by default." : "开启后记录环境切换、DPI、板载写入及失败原因；默认关闭。"; color: Theme.muted; font-size: 12px; }
                 Rectangle { height: 44px; border-color: Theme.hairline; border-width: 1px; border-radius: 8px; background: Theme.surface;
                     HorizontalLayout { padding-left: 12px; padding-right: 12px;
-                        Text { text: "环境选择"; color: Theme.ink; font-size: 14px; vertical-alignment: center; }
+                        Text { text: root.english ? "Language" : "语言 / Language"; color: Theme.ink; font-size: 14px; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                        Text { text: root.language; color: Theme.primary; font-size: 14px; vertical-alignment: center; }
+                        Text { text: root.language-menu-open ? (root.english ? "Collapse" : "收起") : (root.english ? "Click to select" : "点击选择"); color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                    }
+                    TouchArea { enabled: root.editing-enabled; clicked => { root.language-menu-open = !root.language-menu-open; } }
+                }
+                if root.language-menu-open: HorizontalLayout {
+                    spacing: 8px;
+                    for value in ["简体中文", "English"]: Rectangle {
+                        min-width: 130px; height: 38px; border-radius: 7px; border-width: 1px; border-color: root.language == value ? Theme.primary : Theme.hairline; background: root.language == value ? Theme.primary-soft : Theme.surface;
+                        Text { text: value; color: root.language == value ? Theme.primary : Theme.ink; horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea { enabled: root.editing-enabled; clicked => { root.language-selected(value); root.language-menu-open = false; } }
+                    }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                }
+                Text { text: root.english ? "Simplified Chinese and English are included. Add other languages through this open-source project. The installer will also offer a language choice." : "当前提供简体中文和 English；其他语言可从已开源项目自行开发。安装包也将提供语言选择。"; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                Rectangle { height: 44px; border-color: Theme.hairline; border-width: 1px; border-radius: 8px; background: Theme.surface;
+                    HorizontalLayout { padding-left: 12px; padding-right: 12px;
+                        Text { text: root.english ? "Mode" : "模式"; color: Theme.ink; font-size: 14px; vertical-alignment: center; }
                         Rectangle { horizontal-stretch: 1; background: transparent; }
                         Text { text: root.selection-mode; color: Theme.primary; font-size: 14px; vertical-alignment: center; }
-                        Text { text: "点击切换"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                        Text { text: root.mode-menu-open ? (root.english ? "Collapse" : "收起") : (root.english ? "Click to select" : "点击选择"); color: Theme.muted; font-size: 12px; vertical-alignment: center; }
                     }
-                    TouchArea { enabled: root.editing-enabled; clicked => { root.selection-mode-cycle(); } }
+                    TouchArea { enabled: root.editing-enabled; clicked => { root.mode-menu-open = !root.mode-menu-open; } }
                 }
-                Text { text: "IPC 协议：1    配置修订：" + root.revision; color: Theme.muted; font-size: 12px; }
+                if root.mode-menu-open: VerticalLayout {
+                    spacing: 6px;
+                    for mode in root.mode-options: Rectangle {
+                        height: 38px; border-radius: 7px; border-width: 1px; border-color: root.selection-mode == mode ? Theme.primary : Theme.hairline; background: root.selection-mode == mode ? Theme.primary-soft : Theme.surface;
+                        HorizontalLayout { padding-left: 12px; padding-right: 12px;
+                            Text { text: mode; color: root.selection-mode == mode ? Theme.primary : Theme.ink; font-size: 13px; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                            if root.selection-mode == mode: Text { text: root.english ? "Current" : "当前"; color: Theme.primary; font-size: 12px; vertical-alignment: center; }
+                        }
+                        TouchArea { enabled: root.editing-enabled; clicked => { root.selection-mode-selected(mode); root.mode-menu-open = false; } }
+                    }
+                }
+                Text { text: root.english ? "Auto mode: switches among Office, CS2, and imported app profiles based on the foreground program." : "自动模式：根据当前前台程序，在 Office、CS2 和所有已导入应用环境之间自动切换。"; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                Text { text: root.english ? "Fixed mode: always uses the selected Office, CS2, or imported profile." : "固定模式：始终使用指定的 Office、CS2 或导入环境配置，不随前台程序变化。"; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                Rectangle { height: 58px; border-color: Theme.hairline; border-width: 1px; border-radius: 8px; background: Theme.surface-soft;
+                    HorizontalLayout { padding-left: 12px; padding-right: 12px; spacing: 12px;
+                        VerticalLayout { Text { text: root.english ? "Logitech G102 LIGHTSYNC lighting" : "Logitech G102 LIGHTSYNC 灯光"; color: Theme.ink; font-size: 14px; } Text { text: root.english ? "Permanently off and not configurable. Add lighting support through this open-source project." : "固定关闭，不提供修改。需要灯光支持可从已开源项目自行开发。"; color: Theme.muted; font-size: 12px; } }
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                        Text { text: root.english ? "Off · Locked" : "已关闭 · 不可修改"; color: Theme.muted; font-size: 13px; vertical-alignment: center; }
+                    }
+                }
+                Text { text: (root.english ? "IPC protocol: 1    Config revision: " : "IPC 协议：1    配置修订：") + root.revision; color: Theme.muted; font-size: 12px; }
+                AboutSlint { height: 80px; }
             }
         }
-        Rectangle { vertical-stretch: 1; background: transparent; }
+        Rectangle { min-height: 1px; background: transparent; }
+      }
     }
 }
