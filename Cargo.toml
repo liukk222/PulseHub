@@ -23,7 +23,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 authors = ["PulseHub contributors"]
-license = "UNLICENSED"
+license = "MIT"
 repository = "https://github.com/liukk222/PulseHub"
 
 [workspace.lints.rust]
