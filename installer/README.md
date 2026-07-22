@@ -1,20 +1,98 @@
-# PulseHub Windows 11 安装器
+# PulseHub Windows 11 installer
 
-安装向导顺序：
+[简体中文](README_ZH.md) | **English**
 
-1. 选择安装向导语言（简体中文或 English）。
-2. 阅读并接受中英双语安装与使用协议；拒绝时不能继续。
-3. 阅读第三方与兼容性研究声明。
-4. 选择安装目录。
-5. 选择 PulseHub 默认界面语言。
-6. 安装，可选立即启动 PulseHub。
+This directory contains the Inno Setup source and PowerShell build script for the PulseHub Windows 11 x64 installer.
 
-构建：
+## Installer flow
+
+The generated installer uses the following page order:
+
+1. Choose the setup language: Simplified Chinese or English.
+2. Read and accept the bilingual installation and use agreement. Setup cannot continue unless the agreement is accepted.
+3. Read the third-party and compatibility research notice.
+4. Choose the installation directory.
+5. Choose the default PulseHub interface language.
+6. Install PulseHub and optionally launch it.
+
+## Requirements
+
+- Windows 11 x64
+- PowerShell 7 recommended
+- Rust 1.97 or newer with the `x86_64-pc-windows-msvc` toolchain
+- Microsoft C++ Build Tools
+- [Inno Setup 6](https://jrsoftware.org/isinfo.php)
+
+Install Inno Setup with Windows Package Manager:
+
+```powershell
+winget install --id JRSoftware.InnoSetup -e
+```
+
+## Build
+
+Run the build script from the repository root:
 
 ```powershell
 .\installer\build-installer.ps1
 ```
 
-脚本会构建 Rust Release 程序、从 Inno Setup 官方源码仓库取得简体中文语言文件、从 GUI 可执行文件提取橙色 P 图标，并调用 Inno Setup 6 生成单文件 Windows x64 安装器。输出位于 `installer/output`。
+The script:
 
-安装包包含安装风险协议 `LICENSE-AGREEMENT.txt`、安装器兼容性说明 `THIRD_PARTY_NOTICES.txt`、PulseHub 的 MIT `LICENSE`，以及项目完整第三方声明 `THIRD_PARTY_NOTICES.md`。安装风险协议不替代、限制或修改 MIT 许可证授予的源码权利。
+1. builds optimized `pulsehub-agent.exe` and `pulsehub-config.exe` binaries;
+2. downloads the Simplified Chinese Inno Setup language file from the official source repository when it is not cached;
+3. verifies that language file against a pinned SHA-256 value;
+4. extracts the orange PulseHub P icon from the GUI executable;
+5. invokes the Inno Setup command-line compiler;
+6. prints the installer path and SHA-256 value.
+
+The installer is written to:
+
+```text
+installer\output\PulseHub-Setup-0.1.0-windows-x64.exe
+```
+
+`installer\build` and `installer\output` are generated directories and are ignored by Git.
+
+## Reuse existing release binaries
+
+If the required Rust release binaries already exist under `target\release`, skip the Rust build:
+
+```powershell
+.\installer\build-installer.ps1 -SkipRustBuild
+```
+
+The script stops with an error if either required executable is missing.
+
+## Packaged notices
+
+The installer includes:
+
+- `LICENSE-AGREEMENT.txt`: bilingual installation risk and use agreement;
+- `THIRD_PARTY_NOTICES.txt`: bilingual installer compatibility notice;
+- root `LICENSE`: PulseHub MIT License;
+- root `THIRD_PARTY_NOTICES.md`: complete project third-party notices.
+
+The installation agreement does not replace, restrict, or modify the source-code rights granted by the MIT License.
+
+## Release verification
+
+After building, verify the installer:
+
+```powershell
+Get-FileHash .\installer\output\PulseHub-Setup-0.1.0-windows-x64.exe -Algorithm SHA256
+Get-AuthenticodeSignature .\installer\output\PulseHub-Setup-0.1.0-windows-x64.exe
+```
+
+The open-source v0.1.0 installer is not digitally signed. Windows SmartScreen may display an unknown-publisher warning. A public release should always include a separately uploaded SHA-256 checksum file.
+
+## Files
+
+```text
+PulseHub.iss                Inno Setup definition
+build-installer.ps1         Reproducible installer build script
+LICENSE-AGREEMENT.txt       Bilingual installation agreement
+THIRD_PARTY_NOTICES.txt     Bilingual installer compatibility notice
+README.md                   English documentation
+README_ZH.md                Simplified Chinese documentation
+```
