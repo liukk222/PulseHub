@@ -44,14 +44,37 @@ Other mouse models and operating systems are not declared supported by v0.1.0.
 - Fixed report-rate choices: 1000, 500, 250, or 125 Hz
 - Native actions or keyboard shortcuts for the middle button, G4, G5, and G6
 - Protected native left and right clicks
-- Office, CS2, and user-imported EXE profiles
-- Automatic foreground-application switching or a fixed profile mode
+- Independent Office, CS2, and user-imported EXE profiles, each with its own pointer speed and button mappings
+- Automatic pointer-speed and button-mapping switching based on the foreground application, or a fixed profile mode
 - Device reconnect recovery and bounded retry behavior
 - Lightweight background agent and system tray; closing the GUI does not stop profile switching
 - User-configurable safe-exit profile with hardware read-back verification
 - Optional start at sign-in and developer logs; developer logs are off by default
 - Simplified Chinese and English interfaces
-- Logitech G102 LIGHTSYNC lighting is always disabled and is not configurable
+- Device lighting control is not supported; Logitech G102 LIGHTSYNC lighting is always disabled and cannot be changed
+
+## Built for efficiency
+
+PulseHub concentrates real-time device control in `pulsehub-agent.exe`. The agent owns the system tray, foreground-application detection, profile switching, device reconnect recovery, and HID++ communication. `pulsehub-config.exe` runs only while the settings window is open. Closing the GUI terminates the configuration process while leaving a single lightweight background agent running, so automatic switching continues uninterrupted.
+
+Production builds use compiler optimization, Thin LTO, a single code-generation unit, `panic = "abort"`, and stripped symbols. In a real Windows 11 test for this project, Task Manager reported **approximately 0.9 MB of memory** for an idle `pulsehub-agent.exe` after the GUI was closed and developer logging was disabled. This is an observed result from one test environment, not a fixed guarantee for every Windows version, driver, or runtime state. Device reconnection, profile switching, and differences in system accounting can change the instantaneous value.
+
+The goal is straightforward: the full GUI should not remain resident during everyday use. Only the device agent stays quietly in the tray. Open the GUI from the tray when settings need to change, then close it again and let the low-overhead agent continue working.
+
+### Import a dedicated profile for each application
+
+The App profiles page accepts the full path to any EXE, including Word, PowerPoint, design tools, and games. Every imported application can have independent DPI, report-rate, and button-mapping settings:
+
+1. Import the target application's EXE.
+2. Configure the preferred pointer speed and buttons.
+3. Select Auto mode so PulseHub can identify the foreground application.
+4. When the target application becomes active, PulseHub applies its profile automatically; when it loses focus, PulseHub restores the matching Office or other application profile.
+
+This avoids repeatedly changing mouse speed by hand when moving between applications. Fixed mode can also keep Office, CS2, or any imported application profile active at all times.
+
+### No lighting control
+
+PulseHub focuses on mouse performance, button mappings, and application-aware profile switching. It **does not provide RGB or device-lighting controls**. Lighting on the supported Logitech G102 LIGHTSYNC is kept disabled, and the GUI has no color, brightness, or animation controls and no option to remove this restriction. Users who need lighting support can build it themselves from this MIT-licensed open-source project; the official v0.1.0 scope does not include lighting configuration.
 
 ## Install
 
