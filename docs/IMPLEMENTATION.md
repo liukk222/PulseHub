@@ -27,6 +27,5 @@
 | 修改 Slint GUI、托盘或日志 | [06-gui-windows-and-observability.md](./implementation/06-gui-windows-and-observability.md) |
 | 执行发布、测试或规划后续阶段 | [07-build-test-and-roadmap.md](./implementation/07-build-test-and-roadmap.md) |
 
-## Agent 交接
 
-继续开发前先阅读 [NEXT_STEPS.md](./NEXT_STEPS.md)。其中记录当前实机验证状态、下一阶段计划、HID 写入安全约束和交付检查清单。
+
