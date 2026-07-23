@@ -34,6 +34,12 @@ PulseHub 是运行于通用 Windows 计算机的桌面应用，选择 **Slint Ro
 
 官方条款：<https://slint.dev/terms-and-conditions>
 
+## v0.1.1 发布复核
+
+复核日期：2026-07-23
+
+`Cargo.lock` 相比 v0.1.0 的变化仅为 PulseHub 工作区包版本由 `0.1.0` 更新为 `0.1.1`。第三方依赖集合、版本、Cargo feature、目标平台和安装包第三方内容均未变化，因此原许可证审计结论继续有效。
+
 ## 重新审计条件
 
 以下任一情况发生时必须重新审计：
