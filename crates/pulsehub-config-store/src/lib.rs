@@ -11,12 +11,15 @@ use serde::{Deserialize, Serialize};
 
 pub const CONFIG_SCHEMA_VERSION: u32 = 1;
 pub const CONFIG_TRANSFER_SCHEMA_VERSION: u32 = 1;
+pub const PRODUCTION_DEFAULTS_REVISION: u32 = 1;
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigDocument {
     pub schema_version: u32,
+    #[serde(default)]
+    pub production_defaults_revision: u32,
     #[serde(default)]
     pub agent: AgentConfig,
     pub selection: SelectionConfig,
@@ -265,6 +268,7 @@ impl Default for ConfigDocument {
         let office_buttons = office_button_mappings();
         Self {
             schema_version: CONFIG_SCHEMA_VERSION,
+            production_defaults_revision: PRODUCTION_DEFAULTS_REVISION,
             agent: AgentConfig::default(),
             selection: SelectionConfig {
                 mode: SelectionMode::Auto,
@@ -323,6 +327,12 @@ impl ConfigDocument {
             return Err(ConfigError::UnsupportedSchema {
                 found: self.schema_version,
             });
+        }
+        if self.production_defaults_revision != PRODUCTION_DEFAULTS_REVISION {
+            return Err(ConfigError::Validation(format!(
+                "不支持生产默认配置修订 {}",
+                self.production_defaults_revision
+            )));
         }
         validate_profile("office", &self.profiles.office)?;
         validate_profile("cs2", &self.profiles.cs2)?;
@@ -428,6 +438,15 @@ impl ConfigDocument {
             path: path.to_path_buf(),
             message: error.to_string(),
         })?;
+        if document.production_defaults_revision < PRODUCTION_DEFAULTS_REVISION {
+            let defaults = Self::default();
+            document.production_defaults_revision = PRODUCTION_DEFAULTS_REVISION;
+            document.agent.developer_logging = false;
+            document.selection = defaults.selection;
+            document.profiles = defaults.profiles;
+            document.applications.clear();
+            document.shutdown_profile = defaults.shutdown_profile;
+        }
         normalize_profile_dpi_levels(&mut document.profiles.office);
         normalize_profile_dpi_levels(&mut document.profiles.cs2);
         for application in &mut document.applications {
@@ -476,13 +495,23 @@ pub fn load_with_backup(path: &Path) -> Result<ConfigDocument, ConfigError> {
 }
 
 pub fn load_or_create_default(path: &Path) -> Result<ConfigDocument, ConfigError> {
-    if path.exists() || backup_path(path).exists() {
-        load_with_backup(path)
-    } else {
-        let document = ConfigDocument::default();
-        save_atomic(path, &document)?;
-        Ok(document)
+    if path.exists() {
+        match load_one_with_migration_status(path) {
+            Ok((document, migrated)) => {
+                if migrated {
+                    save_atomic(path, &document)?;
+                }
+                return Ok(document);
+            }
+            Err(_) => return load_with_backup(path),
+        }
     }
+    if backup_path(path).exists() {
+        return load_with_backup(path);
+    }
+    let document = ConfigDocument::default();
+    save_atomic(path, &document)?;
+    Ok(document)
 }
 
 pub fn save_atomic(path: &Path, document: &ConfigDocument) -> Result<(), ConfigError> {
@@ -512,8 +541,22 @@ pub fn save_atomic(path: &Path, document: &ConfigDocument) -> Result<(), ConfigE
 }
 
 fn load_one(path: &Path) -> Result<ConfigDocument, ConfigError> {
+    load_one_with_migration_status(path).map(|(document, _)| document)
+}
+
+fn load_one_with_migration_status(path: &Path) -> Result<(ConfigDocument, bool), ConfigError> {
     let text = fs::read_to_string(path).map_err(|source| io_error(path, source))?;
-    ConfigDocument::from_toml(path, &text)
+    let parsed: toml::Value = toml::from_str(&text).map_err(|error| ConfigError::Parse {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    let previous_revision = parsed
+        .get("production_defaults_revision")
+        .and_then(toml::Value::as_integer)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or(0);
+    let document = ConfigDocument::from_toml(path, &text)?;
+    Ok((document, previous_revision < PRODUCTION_DEFAULTS_REVISION))
 }
 
 fn backup_path(path: &Path) -> PathBuf {
@@ -725,7 +768,14 @@ mod tests {
     #[test]
     fn first_run_defaults_keep_all_original_mouse_controls() {
         let document = ConfigDocument::default();
-        for profile in [&document.profiles.office, &document.profiles.cs2] {
+        assert!(!document.agent.developer_logging);
+        assert!(document.applications.is_empty());
+        for profile in [
+            &document.profiles.office,
+            &document.profiles.cs2,
+            &document.shutdown_profile,
+        ] {
+            assert_eq!(profile.dpi, 1600);
             assert_eq!(profile.dpi_levels, [800, 1600, 2400, 3200]);
             for (control, expected) in [
                 ("g102:left", "mouse:left"),
@@ -757,6 +807,73 @@ mod tests {
 
         assert_eq!(migrated.profiles.office.dpi, 1800);
         assert_eq!(migrated.profiles.office.dpi_levels, [800, 1800, 2400, 3200]);
+    }
+
+    #[test]
+    fn pre_v012_config_migrates_once_to_safe_production_defaults() {
+        let mut legacy = ConfigDocument::default();
+        legacy.agent.start_with_windows = false;
+        legacy.agent.language = super::UiLanguage::En;
+        legacy.agent.developer_logging = true;
+        legacy.profiles.office.dpi = 3200;
+        legacy.profiles.cs2.dpi = 3200;
+        legacy.applications.push(ApplicationProfileConfig {
+            id: "winword".to_owned(),
+            name: "Word 环境".to_owned(),
+            executable_path: r"C:\Program Files\Microsoft Office\WINWORD.EXE".to_owned(),
+            process_name: "WINWORD.EXE".to_owned(),
+            profile: legacy.profiles.cs2.clone(),
+        });
+        let text = toml::to_string_pretty(&legacy)
+            .unwrap()
+            .replace("production_defaults_revision = 1\n", "");
+
+        let migrated = ConfigDocument::from_toml("legacy.toml".as_ref(), &text).unwrap();
+
+        assert_eq!(
+            migrated.production_defaults_revision,
+            super::PRODUCTION_DEFAULTS_REVISION
+        );
+        assert!(!migrated.agent.start_with_windows);
+        assert_eq!(migrated.agent.language, super::UiLanguage::En);
+        assert!(!migrated.agent.developer_logging);
+        assert!(migrated.applications.is_empty());
+        for profile in [
+            &migrated.profiles.office,
+            &migrated.profiles.cs2,
+            &migrated.shutdown_profile,
+        ] {
+            assert_eq!(profile.dpi, 1600);
+            assert_eq!(profile.button_mappings, office_button_mappings());
+        }
+    }
+
+    #[test]
+    fn production_defaults_migration_is_persisted_with_backup() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("pulsehub-migration-{nonce}"));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("config.toml");
+        let mut legacy = ConfigDocument::default();
+        legacy.profiles.office.dpi = 3200;
+        let legacy_text = toml::to_string_pretty(&legacy)
+            .unwrap()
+            .replace("production_defaults_revision = 1\n", "");
+        std::fs::write(&path, &legacy_text).unwrap();
+
+        let migrated = load_or_create_default(&path).unwrap();
+
+        assert_eq!(migrated.profiles.office.dpi, 1600);
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("production_defaults_revision = 1"));
+        assert_eq!(
+            std::fs::read_to_string(backup_path(&path)).unwrap(),
+            legacy_text
+        );
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

@@ -42,6 +42,12 @@ Review date: 2026-07-23
 
 Compared with v0.1.0, the only changes in `Cargo.lock` are PulseHub workspace package version updates from `0.1.0` to `0.1.1`. The third-party dependency set, versions, Cargo features, target platform, and third-party installer contents are unchanged, so the original license audit conclusion remains valid.
 
+## v0.1.2 release review
+
+Review date: 2026-07-23
+
+Compared with v0.1.1, the only dependency-related changes in `Cargo.lock` are PulseHub workspace package version updates from `0.1.1` to `0.1.2`. This release changes production defaults, tray state synchronization, and health-check timing without adding, removing, or upgrading third-party dependencies. Cargo features, the `x86_64-pc-windows-msvc` target, and third-party installer contents are unchanged, so the existing license audit conclusion remains valid.
+
 ## Re-audit conditions
 
 A new audit is required whenever any of the following occurs:
