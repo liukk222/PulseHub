@@ -36,11 +36,11 @@ PulseHub is a desktop application running on general-purpose Windows computers. 
 
 Official terms: <https://slint.dev/terms-and-conditions>
 
-## v0.1.2 release review
+## v0.1.3 release review
 
 Review date: 2026-07-23
 
-Compared with v0.1.1, the only changes in `Cargo.lock` are PulseHub workspace package version updates from `0.1.1` to `0.1.2`. The third-party dependency set, versions, Cargo features, target platform, and third-party installer contents are unchanged, so the original license audit conclusion remains valid.
+This release updates the PulseHub workspace package version to `0.1.3` and adjusts tray-language state synchronization and the device-health polling interval. The installer still distributes only `pulsehub-agent.exe`, `pulsehub-config.exe`, the MIT License, and the existing third-party notices; the third-party dependency set, versions, Cargo features, and Windows target platform are unchanged. The original license audit conclusion therefore remains valid. The universal Windows 11 x64 installer is built with the `x86-64-v2` CPU baseline and introduces no additional third-party components.
 
 ## Re-audit conditions
 

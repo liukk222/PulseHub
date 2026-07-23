@@ -49,7 +49,7 @@ winget install --id JRSoftware.InnoSetup -e
 安装程序输出到：
 
 ```text
-installer\output\PulseHub-Setup-0.1.2-windows-x64.exe
+installer\output\PulseHub-Setup-0.1.3-windows-x64.exe
 ```
 
 `installer\build` 和 `installer\output` 是生成目录，已被 Git 忽略。
@@ -80,11 +80,11 @@ installer\output\PulseHub-Setup-0.1.2-windows-x64.exe
 构建完成后验证安装程序：
 
 ```powershell
-Get-FileHash .\installer\output\PulseHub-Setup-0.1.2-windows-x64.exe -Algorithm SHA256
-Get-AuthenticodeSignature .\installer\output\PulseHub-Setup-0.1.2-windows-x64.exe
+Get-FileHash .\installer\output\PulseHub-Setup-0.1.3-windows-x64.exe -Algorithm SHA256
+Get-AuthenticodeSignature .\installer\output\PulseHub-Setup-0.1.3-windows-x64.exe
 ```
 
-开源 v0.1.2 安装包尚未进行数字签名，Windows SmartScreen 可能提示“未知发布者”。公开发布时应同时上传独立的 SHA-256 校验文件。
+开源 v0.1.3 安装包尚未进行数字签名，Windows SmartScreen 可能提示“未知发布者”。公开发布时应同时上传独立的 SHA-256 校验文件。
 
 ## 文件说明
 

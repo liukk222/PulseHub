@@ -1,5 +1,5 @@
 #define MyAppName "PulseHub"
-#define MyAppVersion "0.1.2"
+#define MyAppVersion "0.1.3"
 #define ReleaseDir "..\target\x86_64-pc-windows-msvc\release"
 #define MyAppPublisher "PulseHub contributors"
 #define MyAppURL "https://github.com/liukk222/PulseHub"

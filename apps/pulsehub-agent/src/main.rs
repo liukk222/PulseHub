@@ -65,6 +65,8 @@ struct ApplyFailure {
 
 const ENVIRONMENT_STABLE_FOR: Duration = Duration::from_secs(1);
 const PROFILE_APPLY_COOLDOWN: Duration = Duration::from_secs(5);
+const TRAY_MONITOR_INTERVAL: Duration = Duration::from_secs(1);
+const DEVICE_HEALTH_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const SHUTDOWN_DEVICE_WAIT: Duration = Duration::from_secs(10);
 const SHUTDOWN_DEVICE_RETRY: Duration = Duration::from_millis(250);
 const SHUTDOWN_MAX_ATTEMPTS: u8 = 3;
@@ -286,6 +288,9 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
     initial.config_revision = repository.borrow().revision();
     let snapshot = Arc::new(RwLock::new(initial));
     let stopping = Arc::new(AtomicBool::new(false));
+    let tray_english = Arc::new(AtomicBool::new(
+        config.agent.language == pulsehub_config_store::UiLanguage::En,
+    ));
     let active_clients = Arc::new(AtomicUsize::new(0));
     let (command_tx, command_rx) = mpsc::sync_channel::<DeviceCommand>(16);
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
@@ -433,7 +438,11 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
         }
     }
 
-    let tray_thread = spawn_agent_tray(command_tx.clone(), Arc::clone(&stopping));
+    let tray_thread = spawn_agent_tray(
+        command_tx.clone(),
+        Arc::clone(&stopping),
+        Arc::clone(&tray_english),
+    );
 
     let mut active_profile_key: Option<String> = None;
     let mut backoff = RetryBackoff::default();
@@ -684,6 +693,11 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
                         let result = committed.map(|revision| {
                             let current_config = repository.borrow().document().clone();
                             local_log::set_enabled(current_config.agent.developer_logging);
+                            tray_english.store(
+                                current_config.agent.language
+                                    == pulsehub_config_store::UiLanguage::En,
+                                Ordering::Release,
+                            );
                             let previous = command_snapshot
                                 .read()
                                 .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -773,7 +787,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
             if stopping.load(Ordering::Acquire) {
                 return false;
             }
-            if last_dpi_poll.elapsed() >= Duration::from_millis(500) {
+            if last_dpi_poll.elapsed() >= DEVICE_HEALTH_POLL_INTERVAL {
                 last_dpi_poll = Instant::now();
                 match read_first_g102_dpi(false) {
                     Ok(current_dpi) => {
@@ -823,6 +837,7 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
 fn spawn_agent_tray(
     command_tx: std::sync::mpsc::SyncSender<DeviceCommand>,
     stopping: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    tray_english: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         use slint::{Timer, TimerMode};
@@ -833,7 +848,7 @@ fn spawn_agent_tray(
         let Ok(tray) = pulsehub_ui::AppTray::new() else {
             return;
         };
-        update_agent_tray_language(&tray);
+        tray.set_english(tray_english.load(Ordering::Acquire));
 
         let gui_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let open_gui_running = std::sync::Arc::clone(&gui_running);
@@ -888,8 +903,9 @@ fn spawn_agent_tray(
             return;
         }
         let language_tray = tray.as_weak();
+        let monitor_english = std::sync::Arc::clone(&tray_english);
         let monitor = Timer::default();
-        monitor.start(TimerMode::Repeated, Duration::from_millis(500), move || {
+        monitor.start(TimerMode::Repeated, TRAY_MONITOR_INTERVAL, move || {
             if stopping.load(Ordering::Acquire) {
                 if let Some(tray) = language_tray.upgrade() {
                     let _ = tray.hide();
@@ -898,7 +914,7 @@ fn spawn_agent_tray(
                 return;
             }
             if let Some(tray) = language_tray.upgrade() {
-                update_agent_tray_language(&tray);
+                tray.set_english(monitor_english.load(Ordering::Acquire));
             }
         });
         let trim = Timer::default();
@@ -910,15 +926,6 @@ fn spawn_agent_tray(
         std::thread::sleep(Duration::from_secs(3));
         drop(shutdown_signal);
     })
-}
-
-#[cfg(windows)]
-fn update_agent_tray_language(tray: &pulsehub_ui::AppTray) {
-    if let Ok(path) = pulsehub_config_store::default_config_path()
-        && let Ok(config) = pulsehub_config_store::load_or_create_default(&path)
-    {
-        tray.set_english(config.agent.language == pulsehub_config_store::UiLanguage::En);
-    }
 }
 
 #[cfg(not(windows))]
