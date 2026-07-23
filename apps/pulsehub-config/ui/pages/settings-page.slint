@@ -1,5 +1,5 @@
 import { Theme } from "../theme.slint";
-import { AboutSlint, ScrollView } from "std-widgets.slint";
+import { AboutSlint, Button, ScrollView } from "std-widgets.slint";
 export component SettingsPage inherits Rectangle {
     in property <string> revision;
     in property <string> selection-mode;
@@ -16,6 +16,8 @@ export component SettingsPage inherits Rectangle {
     callback start-with-windows-toggle();
     callback developer-logging-toggle();
     callback language-selected(string);
+    callback config-export-requested();
+    callback config-import-requested();
     background: transparent;
     ScrollView {
       viewport-width: self.width;
@@ -25,7 +27,7 @@ export component SettingsPage inherits Rectangle {
         width: parent.width - 14px; spacing: 20px;
         Text { text: root.english ? "Settings" : "设置"; color: Theme.ink; font-size: 26px; font-weight: 600; }
         Text { text: root.english ? "Startup, mode selection, and diagnostics." : "代理行为、模式选择与诊断信息。"; color: Theme.muted; font-size: 14px; }
-        Rectangle { background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: (root.mode-menu-open ? 470px : 350px) + (root.language-menu-open ? 90px : 0px) + 150px;
+        Rectangle { background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px; min-height: (root.mode-menu-open ? 470px : 350px) + (root.language-menu-open ? 90px : 0px) + 300px;
             VerticalLayout { padding: 20px; spacing: 14px;
                 Rectangle { height: 44px; border-color: Theme.hairline; border-width: 1px; border-radius: 8px; background: Theme.surface;
                     HorizontalLayout { padding-left: 12px; padding-right: 12px;
@@ -89,6 +91,15 @@ export component SettingsPage inherits Rectangle {
                 }
                 Text { text: root.english ? "Auto mode: switches among Office, CS2, and imported app profiles based on the foreground program." : "自动模式：根据当前前台程序，在 Office、CS2 和所有已导入应用环境之间自动切换。"; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
                 Text { text: root.english ? "Fixed mode: always uses the selected Office, CS2, or imported profile." : "固定模式：始终使用指定的 Office、CS2 或导入环境配置，不随前台程序变化。"; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                Rectangle { height: 1px; background: Theme.hairline; }
+                Text { text: root.english ? "Configuration transfer" : "配置导入与导出"; color: Theme.ink; font-size: 15px; font-weight: 600; }
+                Text { text: root.english ? "Exports Office, CS2, exit, app profiles, and switching rules. Import replaces those settings, but keeps this computer's startup, logs, and language preferences." : "导出 Office、CS2、退出配置、应用环境和切换规则。导入会替换这些设置，但保留本机的登录启动、日志和语言偏好。"; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                Text { text: root.english ? "Auto switching matches the EXE filename only. A transferred app profile works when the new computer uses the same filename (for example, WINWORD.EXE); its saved full path is not used for matching." : "自动模式只按 EXE 文件名匹配。导入后仅当新电脑上的文件名相同（例如 WINWORD.EXE）时，应用环境才能保证正常自动切换；保存的完整路径不参与匹配。"; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                HorizontalLayout { spacing: 8px;
+                    Button { text: root.english ? "Export configuration" : "导出配置"; enabled: root.editing-enabled; clicked => { root.config-export-requested(); } }
+                    Button { text: root.english ? "Import configuration" : "导入配置"; enabled: root.editing-enabled; clicked => { root.config-import-requested(); } }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                }
                 Rectangle { height: 58px; border-color: Theme.hairline; border-width: 1px; border-radius: 8px; background: Theme.surface-soft;
                     HorizontalLayout { padding-left: 12px; padding-right: 12px; spacing: 12px;
                         VerticalLayout { Text { text: root.english ? "Logitech G102 LIGHTSYNC lighting" : "Logitech G102 LIGHTSYNC 灯光"; color: Theme.ink; font-size: 14px; } Text { text: root.english ? "Permanently off and not configurable. Add lighting support through this open-source project." : "固定关闭，不提供修改。需要灯光支持可从已开源项目自行开发。"; color: Theme.muted; font-size: 12px; } }

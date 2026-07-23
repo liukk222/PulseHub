@@ -4,6 +4,8 @@
 use std::env;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
+#[cfg(windows)]
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 #[cfg(windows)]
 use std::sync::{
@@ -325,6 +327,44 @@ fn run_gui() -> ExitCode {
     let select_ui = ui.as_weak();
     ui.on_application_selected(move |index| select_application(&select_ui, index));
 
+    let export_ui = ui.as_weak();
+    ui.on_config_export_requested(move || export_configuration(&export_ui));
+    let pending_import = Arc::new(std::sync::Mutex::new(None::<PathBuf>));
+    let select_import_ui = ui.as_weak();
+    let select_import_path = Arc::clone(&pending_import);
+    ui.on_config_import_requested(move || {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("选择 PulseHub 配置文件")
+            .add_filter("PulseHub 配置", &["toml"])
+            .pick_file()
+        else {
+            return;
+        };
+        if let Ok(mut pending) = select_import_path.lock() {
+            *pending = Some(path);
+        }
+        if let Some(window) = select_import_ui.upgrade() {
+            window.set_config_import_dialog_visible(true);
+        }
+    });
+    let confirm_import_ui = ui.as_weak();
+    let confirm_import_path = Arc::clone(&pending_import);
+    ui.on_config_import_confirmed(move || {
+        let path = confirm_import_path
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.take());
+        if let Some(path) = path {
+            import_configuration(&confirm_import_ui, path);
+        }
+    });
+    let cancel_import_path = Arc::clone(&pending_import);
+    ui.on_config_import_cancelled(move || {
+        if let Ok(mut pending) = cancel_import_path.lock() {
+            *pending = None;
+        }
+    });
+
     let discard_ui = ui.as_weak();
     ui.on_discard_requested(move || refresh_gui(discard_ui.clone()));
     let close_discard_ui = ui.as_weak();
@@ -538,6 +578,81 @@ fn refresh_gui(ui: slint::Weak<AppWindow>) {
                 }
             }
             Err(error) => show_gui_error(&ui, "代理未连接", &error),
+        });
+    });
+}
+
+#[cfg(windows)]
+fn export_configuration(ui: &slint::Weak<AppWindow>) {
+    let result = (|| -> Result<PathBuf, String> {
+        let config_path =
+            pulsehub_config_store::default_config_path().map_err(|error| error.to_string())?;
+        let config = pulsehub_config_store::load_or_create_default(&config_path)
+            .map_err(|error| error.to_string())?;
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("导出 PulseHub 配置")
+            .set_file_name("pulsehub-config-export.toml")
+            .add_filter("PulseHub 配置", &["toml"])
+            .save_file()
+        else {
+            return Err("已取消导出。".to_owned());
+        };
+        std::fs::write(
+            &path,
+            config
+                .export_transfer()
+                .to_toml()
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| format!("无法写入 {}：{error}", path.display()))?;
+        Ok(path)
+    })();
+    if let Some(window) = ui.upgrade() {
+        match result {
+            Ok(path) => {
+                window.set_save_title("配置已导出".into());
+                window.set_save_detail(
+                    format!(
+                        "已导出到 {}。未保存的窗口草稿不会包含在导出文件中。",
+                        path.display()
+                    )
+                    .into(),
+                );
+            }
+            Err(error) if error == "已取消导出。" => {}
+            Err(error) => {
+                window.set_save_title("配置导出失败".into());
+                window.set_save_detail(error.into());
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn import_configuration(ui: &slint::Weak<AppWindow>, import_path: PathBuf) {
+    let base_revision = ui
+        .upgrade()
+        .map(|window| window.get_base_revision() as u64)
+        .unwrap_or(0);
+    if let Some(window) = ui.upgrade() {
+        window.set_busy(true);
+        window.set_save_title("正在导入配置".into());
+        window.set_save_detail("正在校验导入文件并提交给代理。".into());
+    }
+    let worker_ui = ui.clone();
+    std::thread::spawn(move || {
+        let result = import_gui_config(&import_path, base_revision);
+        let _ = slint::invoke_from_event_loop(move || match result {
+            Ok((snapshot, config)) => {
+                if let Some(window) = worker_ui.upgrade() {
+                    apply_gui_state(&window, &snapshot, &config);
+                    window.set_draft_dirty(false);
+                    window.set_busy(false);
+                    window.set_save_title("配置已导入并应用".into());
+                    window.set_save_detail("Office、CS2、退出配置、应用环境和切换规则已更新。自动模式仅按 EXE 文件名匹配。".into());
+                }
+            }
+            Err(error) => show_gui_error(&worker_ui, "配置导入失败", &error),
         });
     });
 }
@@ -954,6 +1069,56 @@ fn save_gui_config(
         .data
         .and_then(|data| serde_json::from_value(data).ok())
         .ok_or_else(|| "代理返回的提交快照无效".to_owned())?;
+    Ok((snapshot, config))
+}
+
+#[cfg(windows)]
+fn import_gui_config(
+    import_path: &Path,
+    base_revision: u64,
+) -> Result<(AgentSnapshot, pulsehub_config_store::ConfigDocument), String> {
+    use pulsehub_ipc::windows::{connect_with_retry, default_pipe_path};
+
+    let text = std::fs::read_to_string(import_path)
+        .map_err(|error| format!("无法读取 {}：{error}", import_path.display()))?;
+    let transfer = pulsehub_config_store::ConfigTransfer::from_toml(import_path, &text)
+        .map_err(|error| error.to_string())?;
+    let config_path =
+        pulsehub_config_store::default_config_path().map_err(|error| error.to_string())?;
+    let mut config = pulsehub_config_store::load_or_create_default(&config_path)
+        .map_err(|error| error.to_string())?;
+    config
+        .apply_transfer(transfer)
+        .map_err(|error| error.to_string())?;
+    let draft = serde_json::to_value(&config).map_err(|error| error.to_string())?;
+    let mut stream = connect_with_retry(
+        default_pipe_path().map_err(|error| error.to_string())?,
+        Duration::from_secs(5),
+        Duration::from_millis(100),
+    )
+    .map_err(|error| error.to_string())?;
+    negotiate(&mut stream)?;
+    exchange(
+        &mut stream,
+        &Request::ValidateDraft {
+            version: PROTOCOL_VERSION,
+            request_id: "gui-import-validate".into(),
+            draft: draft.clone(),
+        },
+    )?;
+    let response = exchange(
+        &mut stream,
+        &Request::CommitConfig {
+            version: PROTOCOL_VERSION,
+            request_id: "gui-import-commit".into(),
+            base_revision,
+            draft,
+        },
+    )?;
+    let snapshot = response
+        .data
+        .and_then(|data| serde_json::from_value(data).ok())
+        .ok_or_else(|| "代理返回的导入快照无效".to_owned())?;
     Ok((snapshot, config))
 }
 
