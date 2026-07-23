@@ -1,10 +1,11 @@
 # PulseHub：工程结构与模块职责
 
+> **Agent 导读：** 本文支撑根目录 [`AGENTS.md`](../../AGENTS.md) 的重构、新功能和设备适配工作。修改 crate、依赖或跨层契约前，先核对本文的依赖方向与职责边界。
 > 涵盖 Cargo Workspace 结构及各 crate 的职责边界。
 
 ## 4. 建议工程结构
 
-~~~text
+```text
 PulseHub/
 ├─ Cargo.toml
 ├─ Cargo.lock
@@ -18,13 +19,15 @@ PulseHub/
 │     ├─ build.rs
 │     ├─ src/
 │     └─ ui/
-│        └─ main.slint
+│        └─ app-window.slint
 ├─ crates/
-│  ├─ pulsehub-core/       # 领域类型、校验、错误和 DTO
-│  ├─ pulsehub-device/     # HID 传输、HID++ 编解码、G102 适配
-│  ├─ pulsehub-profile/    # 环境选择和幂等应用状态机
-│  ├─ pulsehub-config/     # 配置 schema、迁移和原子持久化
-│  └─ pulsehub-ipc/        # Named Pipe 帧、消息和协议版本
+│  ├─ pulsehub-config-store/    # 配置 schema、校验、备份与原子保存
+│  ├─ pulsehub-core/            # 领域类型
+│  ├─ pulsehub-device/          # HID 发现、HID++ 与 G102 适配
+│  ├─ pulsehub-ipc/             # DTO、帧协议和 Windows Named Pipe
+│  ├─ pulsehub-profile/         # 环境选择、去重与退避
+│  ├─ pulsehub-ui/              # Slint 生成代码和公共 UI 集成
+│  └─ pulsehub-windows-session/ # 当前 Windows 登录会话 TokenLogonSid
 ├─ tools/
 │  └─ pulsehub-probe/      # 仅开发使用的设备探测工具
 ├─ assets/
@@ -35,24 +38,27 @@ PulseHub/
 │  └─ hardware/
 └─ docs/
    └─ IMPLEMENTATION.md
-~~~
+```
 
 依赖方向必须保持单向：
 
-~~~mermaid
+```mermaid
 flowchart TD
     Core["pulsehub-core"]
     Device["pulsehub-device"] --> Core
     Profile["pulsehub-profile"] --> Core
-    Config["pulsehub-config"] --> Core
-    IPC["pulsehub-ipc"] --> Core
+    ConfigStore["pulsehub-config-store"] --> Core
+    IPC["pulsehub-ipc"] --> WindowsSession["pulsehub-windows-session"]
     Agent["pulsehub-agent"] --> Device
     Agent --> Profile
-    Agent --> Config
+    Agent --> ConfigStore
     Agent --> IPC
-    UI["pulsehub-config app"] --> IPC
+    Agent --> UIIntegration["pulsehub-ui / Slint"]
+    UI["pulsehub-config app"] --> ConfigStore
+    UI --> IPC
     UI --> Core
-~~~
+    UI --> UIIntegration
+```
 
 `pulsehub-core` 不得依赖 Win32、Slint 或具体 Logitech 协议。GUI 也不得依赖 `pulsehub-device`。
 
@@ -62,7 +68,7 @@ flowchart TD
 
 定义与平台无关的领域模型：
 
-~~~rust
+```rust
 pub enum Environment {
     Office,
     Cs2,
@@ -104,7 +110,7 @@ pub struct Profile {
     pub dpi: u16,
     pub buttons: Vec<ButtonMapping>,
 }
-~~~
+```
 
 `ButtonAction` 只能表示一个离散动作，不包含事件序列、循环、等待时间或重复次数。`LogicalControl` 表示设备通过运行时重映射功能明确公布的目标 Control ID；`OnboardKeyboard` 和 `OnboardConsumer` 只有在板载配置功能确认支持后才会出现在能力列表。UI 必须同时检查动作和 `MappingMechanism`，不能因领域 enum 存在某个变体就假定当前设备支持它。
 
@@ -118,7 +124,7 @@ pub struct Profile {
 
 对上层暴露同步接口，因为所有调用已经被串行化到设备工作线程：
 
-~~~rust
+```rust
 pub trait MouseDevice: Send {
     fn identity(&self) -> &DeviceIdentity;
     fn capabilities(&self) -> &DeviceCapabilities;
@@ -126,11 +132,11 @@ pub trait MouseDevice: Send {
     fn apply_profile(&mut self, profile: &Profile)
         -> Result<ApplyReport, DeviceError>;
 }
-~~~
+```
 
 传输层再通过内部 trait 隔离：
 
-~~~rust
+```rust
 pub trait HidTransport {
     fn transact(
         &mut self,
@@ -138,7 +144,7 @@ pub trait HidTransport {
         timeout: Duration,
     ) -> Result<Vec<u8>, TransportError>;
 }
-~~~
+```
 
 协议验证阶段可先使用 `hidapi` 的 Windows 后端；生产版本是否改为 `windows` crate 直接调用 SetupAPI/HID API，以实测资源、设备兼容和维护成本为准。上层不应感知这个选择。
 
@@ -153,7 +159,7 @@ pub trait HidTransport {
 - 判断是否需要应用配置。
 - 维护设备连接、应用中、就绪和降级状态。
 
-### 5.4 `pulsehub-config`
+### 5.4 `pulsehub-config-store`
 
 负责：
 
@@ -163,10 +169,7 @@ pub trait HidTransport {
 - 同目录临时文件写入、落盘和原子替换。
 - 主文件损坏时读取备份并报告恢复事件。
 
-阶段 3 当前实现使用 `serde`/`toml` 严格解析 schema v1，并拒绝未知字段；校验覆盖必需的 Office/CS2
-配置、自动选择进程规则、重复物理控制、Keyboard HID Usage 和左/右主点击保护。默认配置为 Office
-`1800 DPI`、CS2 `800 DPI`，两者共用已经验证的板载办公按键映射，因此环境切换不会反复提交
-按键闪存。`pulsehub-agent` 首次运行已在 `%APPDATA%\PulseHub\config.toml` 创建并重新加载该配置。
+当前 `pulsehub-config-store` 使用 `serde`/`toml` 解析 schema v1；配置校验覆盖 Office/CS2/退出 profile、应用环境、进程规则、回报率、四个严格递增的 DPI 档位、重复物理控制、Keyboard HID Usage 与左/右主点击保护。默认 Office 与 CS2 DPI 都为 `1600`，回报率为 `1000 Hz`，按键保持原始鼠标动作；首次运行在 `%APPDATA%\\PulseHub\\config.toml` 创建配置。当前 G102 自动完整应用会比较板载内容后按需提交闪存，因此文档不得再宣称环境切换“不会反复提交按键闪存”。
 
 ### 5.5 `pulsehub-ipc`
 

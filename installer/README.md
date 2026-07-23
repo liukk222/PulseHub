@@ -42,14 +42,14 @@ The script:
 1. builds optimized `pulsehub-agent.exe` and `pulsehub-config.exe` binaries;
 2. downloads the Simplified Chinese Inno Setup language file from the official source repository when it is not cached;
 3. verifies that language file against a pinned SHA-256 value;
-4. extracts the orange PulseHub P icon from the GUI executable;
+4. validates the Slint `tray-icon.svg` artwork, renders it as a multi-size ICO, and uses that ICO for Setup, shortcuts, and Windows program entries;
 5. invokes the Inno Setup command-line compiler;
 6. prints the installer path and SHA-256 value.
 
 The installer is written to:
 
 ```text
-installer\output\PulseHub-Setup-0.1.3-windows-x64.exe
+installer\output\PulseHub-Setup-0.1.4-windows-x64.exe
 ```
 
 `installer\build` and `installer\output` are generated directories and are ignored by Git.
@@ -80,11 +80,11 @@ The installation agreement does not replace, restrict, or modify the source-code
 After building, verify the installer:
 
 ```powershell
-Get-FileHash .\installer\output\PulseHub-Setup-0.1.3-windows-x64.exe -Algorithm SHA256
-Get-AuthenticodeSignature .\installer\output\PulseHub-Setup-0.1.3-windows-x64.exe
+Get-FileHash .\installer\output\PulseHub-Setup-0.1.4-windows-x64.exe -Algorithm SHA256
+Get-AuthenticodeSignature .\installer\output\PulseHub-Setup-0.1.4-windows-x64.exe
 ```
 
-The open-source v0.1.3 installer is not digitally signed. Windows SmartScreen may display an unknown-publisher warning. A public release should always include a separately uploaded SHA-256 checksum file.
+The open-source v0.1.4 installer is not digitally signed. Windows SmartScreen may display an unknown-publisher warning. A public release should always include a separately uploaded SHA-256 checksum file.
 
 ## Files
 

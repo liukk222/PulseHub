@@ -1,5 +1,5 @@
 #define MyAppName "PulseHub"
-#define MyAppVersion "0.1.3"
+#define MyAppVersion "0.1.4"
 #define ReleaseDir "..\target\x86_64-pc-windows-msvc\release"
 #define MyAppPublisher "PulseHub contributors"
 #define MyAppURL "https://github.com/liukk222/PulseHub"
@@ -21,7 +21,7 @@ InfoBeforeFile=THIRD_PARTY_NOTICES.txt
 OutputDir=output
 OutputBaseFilename=PulseHub-Setup-{#MyAppVersion}-windows-x64
 SetupIconFile=build\PulseHub.ico
-UninstallDisplayIcon={app}\{#MyAppExeName}
+UninstallDisplayIcon={app}\PulseHub.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -59,9 +59,10 @@ Source: "LICENSE-AGREEMENT.txt"; DestDir: "{app}"; DestName: "LICENSE-AGREEMENT.
 Source: "THIRD_PARTY_NOTICES.txt"; DestDir: "{app}"; DestName: "THIRD_PARTY_NOTICES.txt"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE"; Flags: ignoreversion
 Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; DestName: "THIRD_PARTY_NOTICES.md"; Flags: ignoreversion
+Source: "build\PulseHub.ico"; DestDir: "{app}"; DestName: "PulseHub.ico"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\PulseHub"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\PulseHub"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\PulseHub.ico"
 Name: "{group}\卸载 PulseHub"; Filename: "{uninstallexe}"; Languages: zhcn
 Name: "{group}\Uninstall PulseHub"; Filename: "{uninstallexe}"; Languages: english
 

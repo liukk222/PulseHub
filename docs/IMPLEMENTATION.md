@@ -1,7 +1,8 @@
 # PulseHub 实现文档
 
-> 更新日期：2026-07-21
-> 文档状态：持续实现与实机验证
+> **Agent 入口：** 本文件及其子文档为根目录 [`AGENTS.md`](../AGENTS.md) 提供实现索引；开发范围、安全不变量与优先级以 `AGENTS.md` 为准。
+> 更新日期：2026-07-23
+> 文档状态：面向持续开发、重构和设备适配的实现参考
 
 原单文件实现文档已按主题拆分。本文件只作为稳定入口，详细内容位于 [implementation](./implementation/) 目录。
 
@@ -17,15 +18,12 @@
 
 ## 按任务查阅
 
-| 任务 | 文档 |
-|---|---|
-| 理解总体架构和进程边界 | [01-overview-and-architecture.md](./implementation/01-overview-and-architecture.md) |
-| 修改 crate 或依赖关系 | [02-workspace-and-modules.md](./implementation/02-workspace-and-modules.md) |
-| 修改后台代理、自动切换或恢复逻辑 | [03-agent-and-profile-switching.md](./implementation/03-agent-and-profile-switching.md) |
-| 修改 G102 DPI、按键或板载闪存 | [04-g102-hid.md](./implementation/04-g102-hid.md) |
-| 修改 config.toml 或 Named Pipe IPC | [05-configuration-and-ipc.md](./implementation/05-configuration-and-ipc.md) |
-| 修改 Slint GUI、托盘或日志 | [06-gui-windows-and-observability.md](./implementation/06-gui-windows-and-observability.md) |
-| 执行发布、测试或规划后续阶段 | [07-build-test-and-roadmap.md](./implementation/07-build-test-and-roadmap.md) |
-
-
-
+| 任务                               | 文档                                                                                        |
+| ---------------------------------- | ------------------------------------------------------------------------------------------- |
+| 理解总体架构和进程边界             | [01-overview-and-architecture.md](./implementation/01-overview-and-architecture.md)         |
+| 修改 crate 或依赖关系              | [02-workspace-and-modules.md](./implementation/02-workspace-and-modules.md)                 |
+| 修改后台代理、自动切换或恢复逻辑   | [03-agent-and-profile-switching.md](./implementation/03-agent-and-profile-switching.md)     |
+| 修改 G102 DPI、按键或板载闪存      | [04-g102-hid.md](./implementation/04-g102-hid.md)                                           |
+| 修改 config.toml 或 Named Pipe IPC | [05-configuration-and-ipc.md](./implementation/05-configuration-and-ipc.md)                 |
+| 修改 Slint GUI、托盘或日志         | [06-gui-windows-and-observability.md](./implementation/06-gui-windows-and-observability.md) |
+| 执行发布、测试或规划后续阶段       | [07-build-test-and-roadmap.md](./implementation/07-build-test-and-roadmap.md)               |

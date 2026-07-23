@@ -11,6 +11,7 @@ $buildDir = Join-Path $PSScriptRoot 'build'
 $releaseDir = Join-Path $repoRoot "target\$target\release"
 $configExe = Join-Path $releaseDir 'pulsehub-config.exe'
 $agentExe = Join-Path $releaseDir 'pulsehub-agent.exe'
+$trayIconSource = Join-Path $repoRoot 'apps\pulsehub-config\ui\assets\tray-icon.svg'
 $isccCandidates = @(
     (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
     (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
@@ -57,12 +58,82 @@ if ($languageHash -ne $expectedLanguageHash) {
     throw "Inno Setup Simplified Chinese language file verification failed: $languageHash"
 }
 
+if (-not (Test-Path -LiteralPath $trayIconSource)) {
+    throw "PulseHub tray icon source is missing: $trayIconSource"
+}
+
+# tray-icon.svg is intentionally the sole artwork source for the installer icon.
+# It currently contains only the validated 32×32 PulseHub circle-and-P geometry below.
+# Fail closed if the source artwork changes, rather than silently shipping stale branding.
+$expectedTrayIcon = @'
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <circle cx="16" cy="16" r="15" fill="#dc6547"/>
+  <path d="M10 7h7.5c5 0 8 2.8 8 7.1 0 4.4-3 7.2-8 7.2h-3.1V26H10V7zm4.4 3.8v6.7h2.8c2.5 0 3.8-1.2 3.8-3.4 0-2.1-1.3-3.3-3.8-3.3h-2.8z" fill="#fff"/>
+</svg>
+'@.Trim()
+$actualTrayIcon = (Get-Content -LiteralPath $trayIconSource -Raw).Replace("`r`n", "`n").Trim()
+if ($actualTrayIcon -ne $expectedTrayIcon) {
+    throw 'tray-icon.svg changed. Update the validated SVG-to-ICO renderer before building the installer.'
+}
+
 Add-Type -AssemblyName System.Drawing
-$icon = [System.Drawing.Icon]::ExtractAssociatedIcon($configExe)
-if (-not $icon) { throw 'Could not extract an icon from pulsehub-config.exe.' }
 $iconPath = Join-Path $buildDir 'PulseHub.ico'
-$stream = [System.IO.File]::Create($iconPath)
-try { $icon.Save($stream) } finally { $stream.Dispose(); $icon.Dispose() }
+$iconSizes = @(16, 20, 24, 32, 40, 48, 64, 256)
+$pngImages = [System.Collections.Generic.List[byte[]]]::new()
+foreach ($size in $iconSizes) {
+    $bitmap = [System.Drawing.Bitmap]::new($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    try {
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        try {
+            $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+            $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $graphics.Clear([System.Drawing.Color]::Transparent)
+            $scale = $size / 32.0
+            $backgroundBrush = [System.Drawing.SolidBrush]::new([System.Drawing.ColorTranslator]::FromHtml('#dc6547'))
+            try {
+                $graphics.FillEllipse($backgroundBrush, 1 * $scale, 1 * $scale, 30 * $scale, 30 * $scale)
+            } finally { $backgroundBrush.Dispose() }
+            $path = [System.Drawing.Drawing2D.GraphicsPath]::new([System.Drawing.Drawing2D.FillMode]::Alternate)
+            try {
+                $path.StartFigure()
+                $path.AddLine(10 * $scale, 7 * $scale, 17.5 * $scale, 7 * $scale)
+                $path.AddBezier(17.5 * $scale, 7 * $scale, 22.5 * $scale, 7 * $scale, 25.5 * $scale, 9.8 * $scale, 25.5 * $scale, 14.1 * $scale)
+                $path.AddBezier(25.5 * $scale, 14.1 * $scale, 25.5 * $scale, 18.5 * $scale, 22.5 * $scale, 21.3 * $scale, 17.5 * $scale, 21.3 * $scale)
+                $path.AddLine(17.5 * $scale, 21.3 * $scale, 14.4 * $scale, 21.3 * $scale)
+                $path.AddLine(14.4 * $scale, 21.3 * $scale, 14.4 * $scale, 26 * $scale)
+                $path.AddLine(14.4 * $scale, 26 * $scale, 10 * $scale, 26 * $scale)
+                $path.CloseFigure()
+                $path.StartFigure()
+                $path.AddLine(14.4 * $scale, 10.8 * $scale, 14.4 * $scale, 17.5 * $scale)
+                $path.AddLine(14.4 * $scale, 17.5 * $scale, 17.2 * $scale, 17.5 * $scale)
+                $path.AddBezier(17.2 * $scale, 17.5 * $scale, 19.7 * $scale, 17.5 * $scale, 21 * $scale, 16.3 * $scale, 21 * $scale, 14.1 * $scale)
+                $path.AddBezier(21 * $scale, 14.1 * $scale, 21 * $scale, 12 * $scale, 19.7 * $scale, 10.8 * $scale, 17.2 * $scale, 10.8 * $scale)
+                $path.CloseFigure()
+                $graphics.FillPath([System.Drawing.Brushes]::White, $path)
+            } finally { $path.Dispose() }
+        } finally { $graphics.Dispose() }
+        $stream = [System.IO.MemoryStream]::new()
+        try {
+            $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+            $pngImages.Add($stream.ToArray())
+        } finally { $stream.Dispose() }
+    } finally { $bitmap.Dispose() }
+}
+
+$writer = [System.IO.BinaryWriter]::new([System.IO.File]::Open($iconPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write))
+try {
+    $writer.Write([UInt16]0); $writer.Write([UInt16]1); $writer.Write([UInt16]$pngImages.Count)
+    $offset = 6 + (16 * $pngImages.Count)
+    for ($index = 0; $index -lt $pngImages.Count; $index++) {
+        $size = $iconSizes[$index]
+        $writer.Write([byte]($(if ($size -eq 256) { 0 } else { $size })))
+        $writer.Write([byte]($(if ($size -eq 256) { 0 } else { $size })))
+        $writer.Write([byte]0); $writer.Write([byte]0); $writer.Write([UInt16]1); $writer.Write([UInt16]32)
+        $writer.Write([UInt32]$pngImages[$index].Length); $writer.Write([UInt32]$offset)
+        $offset += $pngImages[$index].Length
+    }
+    foreach ($image in $pngImages) { $writer.Write($image) }
+} finally { $writer.Dispose() }
 
 & $iscc (Join-Path $PSScriptRoot 'PulseHub.iss')
 if ($LASTEXITCODE -ne 0) { throw 'Inno Setup build failed.' }

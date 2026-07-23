@@ -1,5 +1,7 @@
 # Windows Dependency License Audit
 
+> **Agent reference:** This English release-compliance record supports the root [`AGENTS.md`](../AGENTS.md). Keep it semantically aligned with the Simplified Chinese audit when dependencies, build targets, installer contents, Slint licensing, or third-party source usage changes.
+
 **English** | [简体中文](DEPENDENCY_LICENSE_AUDIT_ZH.md)
 
 Audit date: 2026-07-23
@@ -36,11 +38,11 @@ PulseHub is a desktop application running on general-purpose Windows computers. 
 
 Official terms: <https://slint.dev/terms-and-conditions>
 
-## v0.1.3 release review
+## v0.1.4 release review
 
 Review date: 2026-07-23
 
-This release updates the PulseHub workspace package version to `0.1.3` and adjusts tray-language state synchronization and the device-health polling interval. The installer still distributes only `pulsehub-agent.exe`, `pulsehub-config.exe`, the MIT License, and the existing third-party notices; the third-party dependency set, versions, Cargo features, and Windows target platform are unchanged. The original license audit conclusion therefore remains valid. The universal Windows 11 x64 installer is built with the `x86-64-v2` CPU baseline and introduces no additional third-party components.
+This release updates the PulseHub workspace package version to `0.1.4`. The installer distributes `pulsehub-agent.exe`, `pulsehub-config.exe`, the MIT License, the existing third-party notices, and a generated `PulseHub.ico` source-derived icon. The build script verifies the repository's Slint `tray-icon.svg`, renders its validated artwork into the ICO, and uses that ICO for Setup, Start Menu shortcuts, and the Windows uninstall/program entry. It introduces neither a third-party component nor a third-party resource. The third-party dependency set, versions, Cargo features, and Windows target platform are unchanged, so the original license audit conclusion remains valid. The universal Windows 11 x64 installer continues to use the `x86-64-v2` CPU baseline.
 
 ## Re-audit conditions
 

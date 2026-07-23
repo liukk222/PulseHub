@@ -42,14 +42,14 @@ winget install --id JRSoftware.InnoSetup -e
 1. 构建经过优化的 `pulsehub-agent.exe` 和 `pulsehub-config.exe`；
 2. 在没有缓存时，从 Inno Setup 官方源码仓库下载简体中文语言文件；
 3. 使用固定的 SHA-256 校验该语言文件；
-4. 从 GUI 程序中提取橙色 PulseHub P 图标；
+4. 校验 Slint `tray-icon.svg` 图案后，将其渲染为多尺寸 ICO，并以该 ICO 用于安装器、快捷方式和 Windows 程序条目；
 5. 调用 Inno Setup 命令行编译器；
 6. 输出安装程序路径和 SHA-256。
 
 安装程序输出到：
 
 ```text
-installer\output\PulseHub-Setup-0.1.3-windows-x64.exe
+installer\output\PulseHub-Setup-0.1.4-windows-x64.exe
 ```
 
 `installer\build` 和 `installer\output` 是生成目录，已被 Git 忽略。
@@ -80,11 +80,11 @@ installer\output\PulseHub-Setup-0.1.3-windows-x64.exe
 构建完成后验证安装程序：
 
 ```powershell
-Get-FileHash .\installer\output\PulseHub-Setup-0.1.3-windows-x64.exe -Algorithm SHA256
-Get-AuthenticodeSignature .\installer\output\PulseHub-Setup-0.1.3-windows-x64.exe
+Get-FileHash .\installer\output\PulseHub-Setup-0.1.4-windows-x64.exe -Algorithm SHA256
+Get-AuthenticodeSignature .\installer\output\PulseHub-Setup-0.1.4-windows-x64.exe
 ```
 
-开源 v0.1.3 安装包尚未进行数字签名，Windows SmartScreen 可能提示“未知发布者”。公开发布时应同时上传独立的 SHA-256 校验文件。
+开源 v0.1.4 安装包尚未进行数字签名，Windows SmartScreen 可能提示“未知发布者”。公开发布时应同时上传独立的 SHA-256 校验文件。
 
 ## 文件说明
 

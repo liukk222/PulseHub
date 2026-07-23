@@ -1,5 +1,7 @@
 # Windows 依赖许可证审计
 
+> **Agent 参考：** 本发行合规记录服务于根目录 [`AGENTS.md`](../AGENTS.md)。依赖、构建目标、安装器内容、Slint 许可或第三方源码使用发生变化时，必须同步复核本文件及英文副本。
+
 [English](DEPENDENCY_LICENSE_AUDIT.md) | **简体中文**
 
 审计日期：2026-07-23
@@ -36,11 +38,11 @@ PulseHub 是运行于通用 Windows 计算机的桌面应用，选择 **Slint Ro
 
 官方条款：<https://slint.dev/terms-and-conditions>
 
-## v0.1.3 发布复核
+## v0.1.4 发布复核
 
 复核日期：2026-07-23
 
-本次发布将 PulseHub 工作区包版本更新为 `0.1.3`，并调整托盘语言状态同步与设备健康检查周期。安装器仍仅打包 `pulsehub-agent.exe`、`pulsehub-config.exe`、MIT 许可证及既有第三方声明；第三方依赖集合、版本、Cargo feature 和 Windows 目标平台均未变化。因此原许可证审计结论继续有效。Windows 11 x64 通用安装包使用 `x86-64-v2` CPU 基线构建，不增加新的第三方组件。
+本次发布将 PulseHub 工作区包版本更新为 `0.1.4`。安装器打包 `pulsehub-agent.exe`、`pulsehub-config.exe`、MIT 许可证、既有第三方声明及由源文件生成的 `PulseHub.ico` 图标。构建脚本会校验仓库已有的 Slint `tray-icon.svg`，将其已验证的图案渲染为 ICO，并以该 ICO 用于安装器、开始菜单快捷方式及 Windows 卸载/程序条目；不引入第三方组件或第三方资源。第三方依赖集合、版本、Cargo feature 和 Windows 目标平台均未变化，因此原许可证审计结论继续有效。Windows 11 x64 通用安装包继续使用 `x86-64-v2` CPU 基线构建。
 
 ## 重新审计条件
 

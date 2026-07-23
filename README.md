@@ -4,7 +4,7 @@
 
 [![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png)](https://slint.dev/) <img src="apps/pulsehub-config/ui/assets/tray-icon.svg" alt="PulseHub 托盘图标" height="210">
 
-PulseHub is a lightweight, open-source mouse configuration application for Windows 11. Version 0.1.3 provides tested hardware control for the **Logitech G102 LIGHTSYNC**: DPI, report rate, button mappings, portable configuration transfer, application profiles, automatic profile switching, reliable sign-in startup, safe shutdown restoration, and a bilingual Simplified Chinese and English Slint interface.
+PulseHub is a lightweight, open-source mouse configuration application for Windows 11. Version 0.1.4 provides tested hardware control for the **Logitech G102 LIGHTSYNC**: DPI, report rate, button mappings, portable configuration transfer, application profiles, automatic profile switching, reliable sign-in startup, safe shutdown restoration, and a bilingual Simplified Chinese and English Slint interface.
 
 PulseHub is an independent project. It is not affiliated with, authorized by, or endorsed by Logitech.
 
@@ -64,23 +64,23 @@ Set optional sign-in startup, developer logging, and the safe-exit profile. Befo
 
 Download the latest Windows installer from [GitHub Releases](https://github.com/liukk222/PulseHub/releases/latest):
 
-- [PulseHub v0.1.3 Windows 11 x64 installer](https://github.com/liukk222/PulseHub/releases/download/v0.1.3/PulseHub-Setup-0.1.3-windows-x64.exe)
-- [SHA-256 checksum file](https://github.com/liukk222/PulseHub/releases/download/v0.1.3/PulseHub-Setup-0.1.3-windows-x64.exe.sha256)
+- [PulseHub v0.1.4 Windows 11 x64 installer](https://github.com/liukk222/PulseHub/releases/download/v0.1.4/PulseHub-Setup-0.1.4-windows-x64.exe)
+- [SHA-256 checksum file](https://github.com/liukk222/PulseHub/releases/download/v0.1.4/PulseHub-Setup-0.1.4-windows-x64.exe.sha256)
 
 Verify the downloaded installer in PowerShell:
 
 ```powershell
-Get-FileHash .\PulseHub-Setup-0.1.3-windows-x64.exe -Algorithm SHA256
+Get-FileHash .\PulseHub-Setup-0.1.4-windows-x64.exe -Algorithm SHA256
 ```
 
 Compare the output with the SHA-256 value in the accompanying `.sha256` file.
 
-The v0.1.3 installer is not digitally signed. Windows SmartScreen may display an unknown-publisher warning. Download it only from this repository and verify the checksum before running it.
+The v0.1.4 installer is not digitally signed. Windows SmartScreen may display an unknown-publisher warning. Download it only from this repository and verify the checksum before running it.
 
 ## Install
 
 1. Exit Logitech G HUB to prevent both applications from controlling the mouse simultaneously.
-2. Run `PulseHub-Setup-0.1.3-windows-x64.exe`.
+2. Run `PulseHub-Setup-0.1.4-windows-x64.exe`.
 3. Choose Simplified Chinese or English for the installer.
 4. Read and accept the installation agreement and third-party notice.
 5. Choose the installation directory and the default PulseHub interface language.
@@ -144,7 +144,7 @@ winget install --id JRSoftware.InnoSetup -e
 .\installer\build-installer.ps1
 ```
 
-The script builds the Rust release binaries, verifies the pinned Simplified Chinese Inno Setup language file, extracts the PulseHub icon, and writes the single-file installer to `installer\output`.
+The script builds the Rust release binaries, verifies the pinned Simplified Chinese Inno Setup language file, renders the validated `tray-icon.svg` artwork into the PulseHub ICO, and writes the single-file installer to `installer\\output`.
 
 To reuse existing release binaries:
 
