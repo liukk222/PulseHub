@@ -1,5 +1,6 @@
 #define MyAppName "PulseHub"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.1.1"
+#define ReleaseDir "..\target\x86_64-pc-windows-msvc\release"
 #define MyAppPublisher "PulseHub contributors"
 #define MyAppURL "https://github.com/liukk222/PulseHub"
 #define MyAppExeName "pulsehub-config.exe"
@@ -52,8 +53,8 @@ english.EnglishOption=English
 english.LaunchProgram=Launch PulseHub
 
 [Files]
-Source: "..\target\release\pulsehub-agent.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\target\release\pulsehub-config.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ReleaseDir}\pulsehub-agent.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ReleaseDir}\pulsehub-config.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "LICENSE-AGREEMENT.txt"; DestDir: "{app}"; DestName: "LICENSE-AGREEMENT.txt"; Flags: ignoreversion
 Source: "THIRD_PARTY_NOTICES.txt"; DestDir: "{app}"; DestName: "THIRD_PARTY_NOTICES.txt"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE"; Flags: ignoreversion

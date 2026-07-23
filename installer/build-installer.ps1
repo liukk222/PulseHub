@@ -4,9 +4,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$target = 'x86_64-pc-windows-msvc'
+$cpuBaseline = 'x86-64-v2'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $buildDir = Join-Path $PSScriptRoot 'build'
-$releaseDir = Join-Path $repoRoot 'target\release'
+$releaseDir = Join-Path $repoRoot "target\$target\release"
 $configExe = Join-Path $releaseDir 'pulsehub-config.exe'
 $agentExe = Join-Path $releaseDir 'pulsehub-agent.exe'
 $isccCandidates = @(
@@ -19,8 +21,24 @@ if (-not $iscc) {
 }
 
 if (-not $SkipRustBuild) {
-    & cargo build --release -p pulsehub-agent -p pulsehub-config
-    if ($LASTEXITCODE -ne 0) { throw 'Rust Release 构建失败。' }
+    if (-not $IsWindows -and $PSVersionTable.PSEdition -eq 'Core') {
+        throw '安装器只能在 Windows 11 上构建。'
+    }
+    $osBuild = [Environment]::OSVersion.Version.Build
+    if ($osBuild -lt 22000) {
+        throw "需要 Windows 11 build 22000 或更高版本，当前 build：$osBuild"
+    }
+    Write-Host "Rust 目标：$target"
+    Write-Host "Windows 11 x64 CPU 基线：$cpuBaseline"
+    $previousRustFlags = $env:RUSTFLAGS
+    try {
+        $env:RUSTFLAGS = "-C target-cpu=$cpuBaseline"
+        & cargo build --release --locked --target $target -p pulsehub-agent -p pulsehub-config
+        if ($LASTEXITCODE -ne 0) { throw 'Rust Release 构建失败。' }
+    }
+    finally {
+        $env:RUSTFLAGS = $previousRustFlags
+    }
 }
 if (-not (Test-Path -LiteralPath $configExe) -or -not (Test-Path -LiteralPath $agentExe)) {
     throw '缺少 Release 可执行文件。'
@@ -51,5 +69,9 @@ $installer = Get-ChildItem (Join-Path $PSScriptRoot 'output') -Filter 'PulseHub-
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
 $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $installer.FullName
+$hashFile = "$($installer.FullName).sha256"
+$hashLine = "$($hash.Hash)  $($installer.Name)"
+[System.IO.File]::WriteAllText($hashFile, "$hashLine`r`n", [System.Text.Encoding]::ASCII)
 Write-Host "安装器：$($installer.FullName)"
 Write-Host "SHA256：$($hash.Hash)"
+Write-Host "校验文件：$hashFile"
