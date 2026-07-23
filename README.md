@@ -3,6 +3,7 @@
 [简体中文](README_ZH.md) | **English**
 
 [![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png)](https://slint.dev/) <img src="apps/pulsehub-config/ui/assets/tray-icon.svg" alt="PulseHub 托盘图标" height="210">
+
 PulseHub is a lightweight, open-source mouse configuration application for Windows 11. Version 0.1.3 provides tested hardware control for the **Logitech G102 LIGHTSYNC**: DPI, report rate, button mappings, portable configuration transfer, application profiles, automatic profile switching, reliable sign-in startup, safe shutdown restoration, and a bilingual Simplified Chinese and English Slint interface.
 
 PulseHub is an independent project. It is not affiliated with, authorized by, or endorsed by Logitech.
