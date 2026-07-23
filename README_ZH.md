@@ -2,7 +2,7 @@
 
 **简体中文** | [English](README.md)
 
-[![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png)](https://slint.dev/) <img src="apps/pulsehub-config/ui/assets/tray-icon.svg" alt="PulseHub 托盘图标" height="210">
+[![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png)](https://slint.dev/) <img src="apps/pulsehub-config/ui/assets/tray-icon.svg" alt="PulseHub 托盘图标" height="220">
 
 PulseHub 是面向 Windows 11 的轻量开源鼠标配置程序。v0.1.3 为 **Logitech G102 LIGHTSYNC** 提供经过实机验证的 DPI、回报率、按键映射、可移植配置迁移、应用环境、自动环境切换、可靠的登录启动、安全退出恢复，以及简体中文与 English 双语 Slint 图形界面。
 
