@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 pub const CONFIG_SCHEMA_VERSION: u32 = 1;
+pub const CONFIG_TRANSFER_SCHEMA_VERSION: u32 = 1;
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +108,20 @@ pub struct ApplicationProfileConfig {
     pub executable_path: String,
     pub process_name: String,
     pub profile: ProfileConfig,
+}
+
+/// 可在不同 Windows 安装之间迁移的配置内容。
+///
+/// 代理运行方式、界面语言和登录启动属于本机偏好，刻意不包含在内。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigTransfer {
+    pub transfer_schema_version: u32,
+    pub selection: SelectionConfig,
+    pub profiles: ProfilesConfig,
+    #[serde(default)]
+    pub applications: Vec<ApplicationProfileConfig>,
+    pub shutdown_profile: ProfileConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -280,6 +295,29 @@ impl Default for ConfigDocument {
 }
 
 impl ConfigDocument {
+    pub fn export_transfer(&self) -> ConfigTransfer {
+        ConfigTransfer {
+            transfer_schema_version: CONFIG_TRANSFER_SCHEMA_VERSION,
+            selection: self.selection.clone(),
+            profiles: self.profiles.clone(),
+            applications: self.applications.clone(),
+            shutdown_profile: self.shutdown_profile.clone(),
+        }
+    }
+
+    pub fn apply_transfer(&mut self, transfer: ConfigTransfer) -> Result<(), ConfigError> {
+        if transfer.transfer_schema_version != CONFIG_TRANSFER_SCHEMA_VERSION {
+            return Err(ConfigError::UnsupportedSchema {
+                found: transfer.transfer_schema_version,
+            });
+        }
+        self.selection = transfer.selection;
+        self.profiles = transfer.profiles;
+        self.applications = transfer.applications;
+        self.shutdown_profile = transfer.shutdown_profile;
+        self.validate()
+    }
+
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.schema_version != CONFIG_SCHEMA_VERSION {
             return Err(ConfigError::UnsupportedSchema {
@@ -397,6 +435,22 @@ impl ConfigDocument {
         }
         document.validate()?;
         Ok(document)
+    }
+}
+
+impl ConfigTransfer {
+    pub fn to_toml(&self) -> Result<String, ConfigError> {
+        toml::to_string_pretty(self).map_err(|error| ConfigError::Serialize(error.to_string()))
+    }
+
+    pub fn from_toml(path: &Path, text: &str) -> Result<Self, ConfigError> {
+        let transfer: Self = toml::from_str(text).map_err(|error| ConfigError::Parse {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+        let mut document = ConfigDocument::default();
+        document.apply_transfer(transfer.clone())?;
+        Ok(transfer)
     }
 }
 
@@ -729,6 +783,33 @@ mod tests {
             document.validate(),
             Err(ConfigError::Validation(message)) if message.contains("进程名重复")
         ));
+    }
+
+    #[test]
+    fn transfer_round_trip_keeps_profiles_and_applications_but_not_machine_preferences() {
+        let mut original = ConfigDocument::default();
+        original.agent.start_with_windows = false;
+        original.agent.language = super::UiLanguage::En;
+        original.profiles.office.dpi = 3200;
+        original.applications.push(ApplicationProfileConfig {
+            id: "winword".to_owned(),
+            name: "Word 环境".to_owned(),
+            executable_path: r"C:\Program Files\Microsoft Office\WINWORD.EXE".to_owned(),
+            process_name: "WINWORD.EXE".to_owned(),
+            profile: original.profiles.cs2.clone(),
+        });
+
+        let text = original.export_transfer().to_toml().unwrap();
+        let transfer =
+            super::ConfigTransfer::from_toml("export.pulsehub.toml".as_ref(), &text).unwrap();
+        let mut destination = ConfigDocument::default();
+        destination.agent.start_with_windows = true;
+        destination.apply_transfer(transfer).unwrap();
+
+        assert_eq!(destination.profiles, original.profiles);
+        assert_eq!(destination.applications, original.applications);
+        assert!(destination.agent.start_with_windows);
+        assert_eq!(destination.agent.language, super::UiLanguage::ZhCn);
     }
 
     #[test]

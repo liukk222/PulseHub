@@ -28,6 +28,7 @@ export component AppWindow inherits Window {
     in-out property <int> selected-page: 0;
     in-out property <bool> draft-dirty: false;
     in-out property <bool> busy: false;
+    in-out property <bool> config-import-dialog-visible: false;
     in-out property <bool> close-dialog-visible: false;
     in-out property <bool> close-after-save: false;
     in-out property <bool> quit-after-close: false;
@@ -112,6 +113,10 @@ export component AppWindow inherits Window {
     callback custom-dpi-requested(int, string);
     callback dpi-level-requested(int, int, string);
     callback import-application-requested(string);
+    callback config-export-requested();
+    callback config-import-requested();
+    callback config-import-confirmed();
+    callback config-import-cancelled();
     callback application-selected(int);
     callback discard-and-close-requested();
     callback retry-apply-requested();
@@ -158,7 +163,7 @@ export component AppWindow inherits Window {
                 if root.selected-page == 0: OverviewPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; device-status: root.device-status; environment-name: root.environment-name; current-dpi: root.current-dpi; apply-title: root.save-title; apply-detail: root.save-detail; apply-enabled: !root.busy && !root.draft-dirty; retry-apply-requested => { root.retry-apply-requested(); } open-project-requested => { root.open-project-requested(); } }
                 if root.selected-page == 1: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "Office"; dpi: root.office-dpi; report-rate: root.office-report-rate; dpi-options: root.dpi-options; mappings: root.office-mappings; dpi-cycle-enabled: root.office-dpi-cycle-enabled; dpi-level-1: root.office-dpi-level-1; dpi-level-2: root.office-dpi-level-2; dpi-level-3: root.office-dpi-level-3; dpi-level-4: root.office-dpi-level-4; process-rule: ""; editing-enabled: !root.busy; dpi-changed(value) => { root.office-dpi = value; root.draft-dirty = true; } report-rate-changed(value) => { root.office-report-rate = value; root.draft-dirty = true; } custom-dpi-submitted(value) => { root.custom-dpi-requested(0, value); } dpi-level-submitted(index, value) => { root.dpi-level-requested(0, index, value); } mapping-input-requested(index) => { root.open-mapping-capture(0, index); } mapping-restore-requested(index) => { root.mapping-restore-requested(0, index); } }
                 if root.selected-page == 2: ProfilePage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; profile-name: "CS2"; dpi: root.cs2-dpi; report-rate: root.cs2-report-rate; dpi-options: root.dpi-options; mappings: root.cs2-mappings; dpi-cycle-enabled: root.cs2-dpi-cycle-enabled; dpi-level-1: root.cs2-dpi-level-1; dpi-level-2: root.cs2-dpi-level-2; dpi-level-3: root.cs2-dpi-level-3; dpi-level-4: root.cs2-dpi-level-4; process-rule: "cs2.exe"; editing-enabled: !root.busy; dpi-changed(value) => { root.cs2-dpi = value; root.draft-dirty = true; } report-rate-changed(value) => { root.cs2-report-rate = value; root.draft-dirty = true; } custom-dpi-submitted(value) => { root.custom-dpi-requested(1, value); } dpi-level-submitted(index, value) => { root.dpi-level-requested(1, index, value); } mapping-input-requested(index) => { root.open-mapping-capture(1, index); } mapping-restore-requested(index) => { root.mapping-restore-requested(1, index); } }
-                if root.selected-page == 3: SettingsPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; revision: root.revision; selection-mode: root.selection-mode; mode-options: root.mode-options; start-with-windows: root.start-with-windows; developer-logging: root.developer-logging; language: root.language; integration-status: root.integration-status; editing-enabled: !root.busy; selection-mode-selected(value) => { root.selection-mode = value; root.draft-dirty = true; } start-with-windows-toggle => { root.start-with-windows = !root.start-with-windows; root.draft-dirty = true; } developer-logging-toggle => { root.developer-logging = !root.developer-logging; root.draft-dirty = true; } language-selected(value) => { root.language = value; root.draft-dirty = true; } }
+                if root.selected-page == 3: SettingsPage { x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; revision: root.revision; selection-mode: root.selection-mode; mode-options: root.mode-options; start-with-windows: root.start-with-windows; developer-logging: root.developer-logging; language: root.language; integration-status: root.integration-status; editing-enabled: !root.busy; selection-mode-selected(value) => { root.selection-mode = value; root.draft-dirty = true; } start-with-windows-toggle => { root.start-with-windows = !root.start-with-windows; root.draft-dirty = true; } developer-logging-toggle => { root.developer-logging = !root.developer-logging; root.draft-dirty = true; } language-selected(value) => { root.language = value; root.draft-dirty = true; } config-export-requested => { root.config-export-requested(); } config-import-requested => { root.config-import-requested(); } }
                 if root.selected-page == 4: Rectangle {
                     x: 24px; y: 24px; width: parent.width - 48px; height: parent.height - 48px; background: transparent;
                     VerticalLayout { spacing: 12px;
@@ -237,6 +242,23 @@ export component AppWindow inherits Window {
                 }
                 Rectangle { vertical-stretch: 1; background: transparent; }
                 Button { text: root.english ? "Cancel" : "取消"; clicked => { root.mapping-editor-visible = false; } }
+            }
+        }
+    }
+    if root.config-import-dialog-visible: Rectangle {
+        x: 0px; y: 0px; width: parent.width; height: parent.height; background: Theme.overlay;
+        Rectangle {
+            width: 500px; height: 250px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            background: Theme.surface; border-color: Theme.hairline; border-width: 1px; border-radius: 12px;
+            VerticalLayout { padding: 24px; spacing: 16px;
+                Text { text: root.english ? "Import configuration?" : "导入配置？"; color: Theme.ink; font-size: 18px; font-weight: 600; }
+                Text { text: root.english ? "This replaces the Office, CS2, exit, app-profile, and switching-rule settings currently saved on this computer. Startup, logs, and language are kept." : "这会替换本机已保存的 Office、CS2、退出配置、应用环境和切换规则；登录启动、日志和语言设置会保留。"; color: Theme.body; font-size: 14px; wrap: word-wrap; }
+                Rectangle { vertical-stretch: 1; background: transparent; }
+                HorizontalLayout { spacing: 10px;
+                    Button { text: root.english ? "Cancel" : "取消"; clicked => { root.config-import-dialog-visible = false; root.config-import-cancelled(); } }
+                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                    Button { text: root.english ? "Import and apply" : "导入并应用"; primary: true; enabled: !root.busy; clicked => { root.config-import-dialog-visible = false; root.config-import-confirmed(); } }
+                }
             }
         }
     }
