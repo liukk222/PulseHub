@@ -49,7 +49,7 @@ The script:
 The installer is written to:
 
 ```text
-installer\output\PulseHub-Setup-0.1.1-windows-x64.exe
+installer\output\PulseHub-Setup-0.1.2-windows-x64.exe
 ```
 
 `installer\build` and `installer\output` are generated directories and are ignored by Git.
@@ -80,11 +80,11 @@ The installation agreement does not replace, restrict, or modify the source-code
 After building, verify the installer:
 
 ```powershell
-Get-FileHash .\installer\output\PulseHub-Setup-0.1.1-windows-x64.exe -Algorithm SHA256
-Get-AuthenticodeSignature .\installer\output\PulseHub-Setup-0.1.1-windows-x64.exe
+Get-FileHash .\installer\output\PulseHub-Setup-0.1.2-windows-x64.exe -Algorithm SHA256
+Get-AuthenticodeSignature .\installer\output\PulseHub-Setup-0.1.2-windows-x64.exe
 ```
 
-The open-source v0.1.1 installer is not digitally signed. Windows SmartScreen may display an unknown-publisher warning. A public release should always include a separately uploaded SHA-256 checksum file.
+The open-source v0.1.2 installer is not digitally signed. Windows SmartScreen may display an unknown-publisher warning. A public release should always include a separately uploaded SHA-256 checksum file.
 
 ## Files
 

@@ -36,11 +36,11 @@ PulseHub is a desktop application running on general-purpose Windows computers. 
 
 Official terms: <https://slint.dev/terms-and-conditions>
 
-## v0.1.1 release review
+## v0.1.2 release review
 
 Review date: 2026-07-23
 
-Compared with v0.1.0, the only changes in `Cargo.lock` are PulseHub workspace package version updates from `0.1.0` to `0.1.1`. The third-party dependency set, versions, Cargo features, target platform, and third-party installer contents are unchanged, so the original license audit conclusion remains valid.
+Compared with v0.1.1, the only changes in `Cargo.lock` are PulseHub workspace package version updates from `0.1.1` to `0.1.2`. The third-party dependency set, versions, Cargo features, target platform, and third-party installer contents are unchanged, so the original license audit conclusion remains valid.
 
 ## Re-audit conditions
 

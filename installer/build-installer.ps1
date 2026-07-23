@@ -17,31 +17,32 @@ $isccCandidates = @(
 )
 $iscc = $isccCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 if (-not $iscc) {
-    throw '未找到 Inno Setup 6。请先安装 JRSoftware.InnoSetup。'
+    throw 'Inno Setup 6 was not found. Install JRSoftware.InnoSetup first.'
 }
 
 if (-not $SkipRustBuild) {
-    if (-not $IsWindows -and $PSVersionTable.PSEdition -eq 'Core') {
-        throw '安装器只能在 Windows 11 上构建。'
+    if ($env:OS -ne 'Windows_NT') {
+        throw 'The installer can only be built on Windows 11.'
     }
     $osBuild = [Environment]::OSVersion.Version.Build
     if ($osBuild -lt 22000) {
-        throw "需要 Windows 11 build 22000 或更高版本，当前 build：$osBuild"
+        throw "Windows 11 build 22000 or later is required; current build: $osBuild"
     }
-    Write-Host "Rust 目标：$target"
-    Write-Host "Windows 11 x64 CPU 基线：$cpuBaseline"
+    Write-Host "Rust target: $target"
+    Write-Host "Windows 11 x64 CPU baseline: $cpuBaseline"
     $previousRustFlags = $env:RUSTFLAGS
     try {
         $env:RUSTFLAGS = "-C target-cpu=$cpuBaseline"
         & cargo build --release --locked --target $target -p pulsehub-agent -p pulsehub-config
-        if ($LASTEXITCODE -ne 0) { throw 'Rust Release 构建失败。' }
+        if ($LASTEXITCODE -ne 0) { throw 'Rust release build failed.' }
     }
     finally {
         $env:RUSTFLAGS = $previousRustFlags
     }
 }
+
 if (-not (Test-Path -LiteralPath $configExe) -or -not (Test-Path -LiteralPath $agentExe)) {
-    throw '缺少 Release 可执行文件。'
+    throw 'Required release executable is missing.'
 }
 
 New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
@@ -53,25 +54,29 @@ if (-not (Test-Path -LiteralPath $chineseLanguageFile)) {
 }
 $languageHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $chineseLanguageFile).Hash
 if ($languageHash -ne $expectedLanguageHash) {
-    throw "Inno Setup 简体中文语言文件校验失败：$languageHash"
+    throw "Inno Setup Simplified Chinese language file verification failed: $languageHash"
 }
+
 Add-Type -AssemblyName System.Drawing
 $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($configExe)
-if (-not $icon) { throw '无法从 pulsehub-config.exe 提取程序图标。' }
+if (-not $icon) { throw 'Could not extract an icon from pulsehub-config.exe.' }
 $iconPath = Join-Path $buildDir 'PulseHub.ico'
 $stream = [System.IO.File]::Create($iconPath)
 try { $icon.Save($stream) } finally { $stream.Dispose(); $icon.Dispose() }
 
 & $iscc (Join-Path $PSScriptRoot 'PulseHub.iss')
-if ($LASTEXITCODE -ne 0) { throw 'Inno Setup 构建失败。' }
+if ($LASTEXITCODE -ne 0) { throw 'Inno Setup build failed.' }
 
 $installer = Get-ChildItem (Join-Path $PSScriptRoot 'output') -Filter 'PulseHub-Setup-*.exe' |
     Sort-Object LastWriteTime -Descending |
     Select-Object -First 1
+if (-not $installer) {
+    throw 'Inno Setup did not produce an installer.'
+}
 $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $installer.FullName
 $hashFile = "$($installer.FullName).sha256"
 $hashLine = "$($hash.Hash)  $($installer.Name)"
 [System.IO.File]::WriteAllText($hashFile, "$hashLine`r`n", [System.Text.Encoding]::ASCII)
-Write-Host "安装器：$($installer.FullName)"
-Write-Host "SHA256：$($hash.Hash)"
-Write-Host "校验文件：$hashFile"
+Write-Host "Installer: $($installer.FullName)"
+Write-Host "SHA256: $($hash.Hash)"
+Write-Host "Checksum file: $hashFile"

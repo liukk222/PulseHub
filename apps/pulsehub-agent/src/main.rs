@@ -272,6 +272,10 @@ fn run_agent(path: &Path, config: &ConfigDocument, exit_after_seconds: Option<u6
             return ExitCode::FAILURE;
         }
     };
+    if let Err(error) = sync_start_with_windows(config.agent.start_with_windows) {
+        eprintln!("登录启动项同步失败：{error}");
+        local_log::error(format_args!("登录启动项同步失败：{error}"));
+    }
     let mut initial = match live_snapshot(config) {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -1311,34 +1315,58 @@ fn startup_integration_status(_: bool) -> IntegrationStatus {
 }
 
 #[cfg(windows)]
+fn startup_command(executable: &Path) -> String {
+    format!(
+        "\"{}\" --run-agent --confirm-device-write",
+        executable.display()
+    )
+}
+
+#[cfg(windows)]
 fn sync_start_with_windows(enabled: bool) -> Result<(), String> {
     let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+    let approval_key =
+        r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
     if !enabled {
         let status = std::process::Command::new("reg.exe")
             .args(["delete", key, "/v", "PulseHub", "/f"])
             .status()
             .map_err(|error| format!("无法启动 reg.exe：{error}"))?;
         if status.success() || startup_integration_status(false) == IntegrationStatus::Synced {
+            let _ = std::process::Command::new("reg.exe")
+                .args(["delete", approval_key, "/v", "PulseHub", "/f"])
+                .status();
             return Ok(());
         }
         return Err(format!("删除登录启动项失败：{status}"));
     }
     let executable =
         std::env::current_exe().map_err(|error| format!("无法解析代理路径：{error}"))?;
-    let command = format!(
-        "\"{}\" --run-agent --confirm-device-write",
-        executable.display()
-    );
+    let command = startup_command(&executable);
     let status = std::process::Command::new("reg.exe")
         .args([
             "add", key, "/v", "PulseHub", "/t", "REG_SZ", "/d", &command, "/f",
         ])
         .status()
         .map_err(|error| format!("无法启动 reg.exe：{error}"))?;
-    if status.success() {
+    if !status.success() {
+        return Err(format!("写入登录启动项失败：{status}"));
+    }
+    let approval_status = std::process::Command::new("reg.exe")
+        .args(["delete", approval_key, "/v", "PulseHub", "/f"])
+        .status()
+        .map_err(|error| format!("无法启动 reg.exe：{error}"))?;
+    if approval_status.success()
+        || !std::process::Command::new("reg.exe")
+            .args(["query", approval_key, "/v", "PulseHub"])
+            .output()
+            .is_ok_and(|output| output.status.success())
+    {
         Ok(())
     } else {
-        Err(format!("写入登录启动项失败：{status}"))
+        Err(format!(
+            "无法解除登录启动项的 Windows 禁用状态：{approval_status}"
+        ))
     }
 }
 
@@ -1964,6 +1992,15 @@ mod tests {
         assert_eq!(
             suggested_dpi_values(400, 1600, Some(400), &[400, 1600]),
             [400, 800, 1600]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn startup_command_quotes_agent_path_and_uses_daemon_arguments() {
+        assert_eq!(
+            startup_command(Path::new(r"C:\Program Files\PulseHub\pulsehub-agent.exe")),
+            r#""C:\Program Files\PulseHub\pulsehub-agent.exe" --run-agent --confirm-device-write"#
         );
     }
 

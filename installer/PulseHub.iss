@@ -1,5 +1,5 @@
 #define MyAppName "PulseHub"
-#define MyAppVersion "0.1.1"
+#define MyAppVersion "0.1.2"
 #define ReleaseDir "..\target\x86_64-pc-windows-msvc\release"
 #define MyAppPublisher "PulseHub contributors"
 #define MyAppURL "https://github.com/liukk222/PulseHub"
@@ -66,7 +66,7 @@ Name: "{group}\卸载 PulseHub"; Filename: "{uninstallexe}"; Languages: zhcn
 Name: "{group}\Uninstall PulseHub"; Filename: "{uninstallexe}"; Languages: english
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "PulseHub"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueName: "PulseHub"; ValueType: string; ValueData: """{app}\pulsehub-agent.exe"" --run-agent --confirm-device-write"; Flags: uninsdeletevalue
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--set-ui-language {code:GetAppLanguage}"; Flags: runhidden waituntilterminated; StatusMsg: "{cm:AppLanguageDescription}"
