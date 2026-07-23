@@ -60,7 +60,7 @@ flowchart TD
     UI --> UIIntegration
 ```
 
-`pulsehub-core` 不得依赖 Win32、Slint 或具体 Logitech 协议。GUI 也不得依赖 `pulsehub-device`。
+`pulsehub-core` 不得依赖 Win32、Slint 或具体 Logitech 协议。GUI 也不得依赖 `pulsehub-device`。工作区默认禁止手写 `unsafe`；当前仅 `pulsehub-ui` 的 Slint 集成和 `pulsehub-windows-session` 的 TokenLogonSid/令牌访问通过 crate 级 lint 受控放宽。
 
 ## 5. 模块职责
 

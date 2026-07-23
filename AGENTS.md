@@ -5,7 +5,7 @@
 ## 1. 项目与平台边界
 
 - PulseHub 是 **仅面向 Windows 11 x64** 的 Rust 桌面程序；不接受 macOS、Linux、移动端、Web 或跨平台适配任务。
-- Cargo Workspace 使用 Rust 2024、Rust 1.97，并全局禁止手写 `unsafe`；`pulsehub-ui` 是 Slint 生成代码所需 unsafe 的唯一受控边界。
+- Cargo Workspace 使用 Rust 2024、Rust 1.97，并默认禁止手写 `unsafe`；`pulsehub-ui`（Slint 生成代码）和 `pulsehub-windows-session`（TokenLogonSid/Windows 令牌访问）是当前仅有的受控 unsafe 边界。
 - 运行时由 `pulsehub-agent.exe`（设备、持久化、系统事件和 Slint `AppTray` 托盘唯一所有者）与 `pulsehub-config.exe`（Slint GUI）构成，通过当前登录会话受限的 Windows Named Pipe 通信。
 - 当前实机验证目标是 **Logitech G102 LIGHTSYNC**（已验证 `046d:c092`、release `0x5200`）。除非任务属于“其他物理设备适配”，不得放宽其设备写入保护或把其协议假设套用到其他设备。
 
@@ -26,7 +26,7 @@
 - **能力驱动**：GUI、配置校验和应用逻辑只能使用设备本次会话实际报告的能力；不得用静态 G102 值伪造其他设备能力。
 - **保存不等于应用**：`commit_config` 成功仅表示原子保存成功；硬件写入、读回验证和 Windows 集成状态必须独立报告。
 - **最小权限与会话隔离**：只使用普通用户权限和当前登录会话的受限 Named Pipe；不使用管理员权限、全局低级钩子、`SendInput`、游戏内存读取或任意 IPC 文件路径。
-- **无高频闪存写入**：环境切换只可执行已验证的运行态操作。可能写入板载闪存的操作必须做内容幂等比较、限频、明确用户意图和完整回读。
+- **无高频闪存写入**：可能写入板载闪存的操作必须做内容幂等比较、限频、明确用户意图和完整回读。当前已验证的 G102 因只有一个用户板载配置，完整环境切换会在 1 秒稳定窗口和 5 秒冷却后按需同步板载配置；目标内容一致时必须跳过写入。
 
 ## 4. 物理设备操作安全
 
