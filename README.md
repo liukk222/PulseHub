@@ -2,11 +2,62 @@
 
 [简体中文](README_ZH.md) | **English**
 
-[![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png)](https://slint.dev/)
-
+[![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png)](https://slint.dev/) <img src="apps/pulsehub-config/ui/assets/tray-icon.svg" alt="PulseHub 托盘图标" height="210">
 PulseHub is a lightweight, open-source mouse configuration application for Windows 11. Version 0.1.3 provides tested hardware control for the **Logitech G102 LIGHTSYNC**: DPI, report rate, button mappings, portable configuration transfer, application profiles, automatic profile switching, reliable sign-in startup, safe shutdown restoration, and a bilingual Simplified Chinese and English Slint interface.
 
 PulseHub is an independent project. It is not affiliated with, authorized by, or endorsed by Logitech.
+
+## Interface and features
+
+PulseHub is designed for **Windows 11 x64** and the **Logitech G102 LIGHTSYNC** (`046d:c092`). The screenshots below describe the available controls directly.
+
+### Application header
+
+![PulseHub application header](docs/imges/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-07-23%20193616.png)
+
+The compact header provides the current device connection state and navigation to each configuration page. The background agent continues profile switching after the settings window is closed.
+
+### Device overview
+
+![PulseHub overview page](docs/imges/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-07-23%20194042.jpg)
+
+Check the connected mouse, reported capabilities, and current profile status here. Use **Reapply** to explicitly send the saved profile to the device; the operation performs hardware read-back verification.
+
+### DPI and report rate
+
+![PulseHub device settings](docs/imges/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-07-23%20194146.jpg)
+
+Each profile can set DPI, a custom DPI value within the mouse capability range, four DPI-cycle levels, and a report rate of 1000, 500, 250, or 125 Hz. Changes are validated before they are saved and applied.
+
+### Button mapping
+
+![PulseHub button mapping](docs/imges/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-07-23%20194221.jpg)
+
+Configure the middle button, G4, G5, and G6 as native mouse actions or supported keyboard shortcuts. Left and right click remain protected native actions. Mapping edits can be restored to their original mouse functions.
+
+### Built-in application profiles
+
+![PulseHub application profiles](docs/imges/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-07-23%20194318.jpg)
+
+Office and CS2 have independent DPI, report-rate, DPI-cycle, and button-mapping settings. This page also shows the profile editing workflow before saving or explicitly reapplying a configuration.
+
+### Import profiles for your applications
+
+![PulseHub profile import and configuration](docs/imges/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-07-23%20194344.jpg)
+
+Import an existing `.exe` file to create a dedicated profile for a game, design tool, or other application. Each imported application has separate device settings and can participate in automatic switching.
+
+### Language support
+
+![PulseHub Simplified Chinese and English interface](docs/imges/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-07-23%20194432.jpg)
+
+PulseHub provides Simplified Chinese and English interfaces. Choose the default display language in settings; the installer supports the same two languages.
+
+### Preferences and safe exit
+
+![PulseHub preferences and safe exit](docs/imges/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-07-23%20194421.jpg)
+
+Set optional sign-in startup, developer logging, and the safe-exit profile. Before the tray agent exits, the safe-exit profile restores the selected DPI, report rate, DPI-cycle level, and safe button mappings. Device lighting is intentionally unavailable: the supported G102 LIGHTSYNC lighting stays disabled.
 
 ## Download
 
@@ -24,54 +75,6 @@ Get-FileHash .\PulseHub-Setup-0.1.3-windows-x64.exe -Algorithm SHA256
 Compare the output with the SHA-256 value in the accompanying `.sha256` file.
 
 The v0.1.3 installer is not digitally signed. Windows SmartScreen may display an unknown-publisher warning. Download it only from this repository and verify the checksum before running it.
-
-## Supported platform and device
-
-- Windows 11 x64
-- Logitech G102 LIGHTSYNC, USB ID `046d:c092`
-- Rust source builds use the MSVC toolchain
-
-Other mouse models and operating systems are not declared supported by v0.1.3.
-
-## Features
-
-- Real HID/HID++ device discovery, capability queries, writes, and read-back verification
-- Configurable DPI and native four-level DPI cycling
-- Fixed report-rate choices: 1000, 500, 250, or 125 Hz
-- Native actions or keyboard shortcuts for the middle button, G4, G5, and G6
-- Protected native left and right clicks
-- Independent Office, CS2, and user-imported EXE profiles, each with its own pointer speed and button mappings
-- Portable configuration import and export for Office, CS2, exit, switching-rule, and imported application profiles
-- Automatic pointer-speed and button-mapping switching based on the foreground application, or a fixed profile mode
-- Device reconnect recovery and bounded retry behavior
-- Lightweight background agent and system tray; closing the GUI does not stop profile switching
-- User-configurable safe-exit profile with hardware read-back verification
-- Optional start at sign-in and developer logs; developer logs are off by default
-- Simplified Chinese and English interfaces
-- Device lighting control is not supported; Logitech G102 LIGHTSYNC lighting is always disabled and cannot be changed
-
-## Built for efficiency
-
-PulseHub concentrates real-time device control in `pulsehub-agent.exe`. The agent owns the system tray, foreground-application detection, profile switching, device reconnect recovery, and HID++ communication. `pulsehub-config.exe` runs only while the settings window is open. Closing the GUI terminates the configuration process while leaving a single lightweight background agent running, so automatic switching continues uninterrupted.
-
-Production builds use compiler optimization, Thin LTO, a single code-generation unit, `panic = "abort"`, and stripped symbols. In a real Windows 11 test for this project, Task Manager reported **approximately 0.9 MB of memory** for an idle `pulsehub-agent.exe` after the GUI was closed and developer logging was disabled. This is an observed result from one test environment, not a fixed guarantee for every Windows version, driver, or runtime state. Device reconnection, profile switching, and differences in system accounting can change the instantaneous value.
-
-The goal is straightforward: the full GUI should not remain resident during everyday use. Only the device agent stays quietly in the tray. Open the GUI from the tray when settings need to change, then close it again and let the low-overhead agent continue working.
-
-### Import a dedicated profile for each application
-
-The App profiles page accepts the full path to any EXE, including Word, PowerPoint, design tools, and games. Every imported application can have independent DPI, report-rate, and button-mapping settings:
-
-1. Import the target application's EXE.
-2. Configure the preferred pointer speed and buttons.
-3. Select Auto mode so PulseHub can identify the foreground application.
-4. When the target application becomes active, PulseHub applies its profile automatically; when it loses focus, PulseHub restores the matching Office or other application profile.
-
-This avoids repeatedly changing mouse speed by hand when moving between applications. Fixed mode can also keep Office, CS2, or any imported application profile active at all times.
-
-### No lighting control
-
-PulseHub focuses on mouse performance, button mappings, and application-aware profile switching. It **does not provide RGB or device-lighting controls**. Lighting on the supported Logitech G102 LIGHTSYNC is kept disabled, and the GUI has no color, brightness, or animation controls and no option to remove this restriction. Users who need lighting support can build it themselves from this MIT-licensed open-source project; the official v0.1.3 scope does not include lighting configuration.
 
 ## Install
 
