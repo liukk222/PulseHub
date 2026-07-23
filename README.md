@@ -4,7 +4,7 @@
 
 [![Made with Slint](https://raw.githubusercontent.com/slint-ui/slint/master/logo/MadeWithSlint-logo-whitebg.png)](https://slint.dev/)
 
-PulseHub is a lightweight, open-source mouse configuration application for Windows 11. Version 0.1.0 provides tested hardware control for the **Logitech G102 LIGHTSYNC**: DPI, report rate, button mappings, application profiles, automatic profile switching, safe shutdown restoration, and a bilingual Slint interface.
+PulseHub is a lightweight, open-source mouse configuration application for Windows 11. Version 0.1.1 provides tested hardware control for the **Logitech G102 LIGHTSYNC**: DPI, report rate, button mappings, portable configuration transfer, application profiles, automatic profile switching, safe shutdown restoration, and a bilingual Slint interface.
 
 PulseHub is an independent project. It is not affiliated with, authorized by, or endorsed by Logitech.
 
@@ -12,22 +12,22 @@ PulseHub is an independent project. It is not affiliated with, authorized by, or
 
 Download the latest Windows installer from [GitHub Releases](https://github.com/liukk222/PulseHub/releases/latest):
 
-- [PulseHub v0.1.0 Windows 11 x64 installer](https://github.com/liukk222/PulseHub/releases/download/v0.1.0/PulseHub-Setup-0.1.0-windows-x64.exe)
-- [SHA-256 checksum file](https://github.com/liukk222/PulseHub/releases/download/v0.1.0/PulseHub-Setup-0.1.0-windows-x64.exe.sha256)
+- [PulseHub v0.1.1 Windows 11 x64 installer](https://github.com/liukk222/PulseHub/releases/download/v0.1.1/PulseHub-Setup-0.1.1-windows-x64.exe)
+- [SHA-256 checksum file](https://github.com/liukk222/PulseHub/releases/download/v0.1.1/PulseHub-Setup-0.1.1-windows-x64.exe.sha256)
 
 Verify the downloaded installer in PowerShell:
 
 ```powershell
-Get-FileHash .\PulseHub-Setup-0.1.0-windows-x64.exe -Algorithm SHA256
+Get-FileHash .\PulseHub-Setup-0.1.1-windows-x64.exe -Algorithm SHA256
 ```
 
 Expected SHA-256:
 
 ```text
-1B5D06DF1E35BAAD81F2EC68F0808AAD6BCA42E9549F574C415E0611AE67F1D8
+3DA00E5EE752598D72A1726A32662868357B13FB1D5CB3E97AA58C06A46A518E
 ```
 
-The v0.1.0 installer is not digitally signed. Windows SmartScreen may display an unknown-publisher warning. Download it only from this repository and verify the checksum before running it.
+The v0.1.1 installer is not digitally signed. Windows SmartScreen may display an unknown-publisher warning. Download it only from this repository and verify the checksum before running it.
 
 ## Supported platform and device
 
@@ -35,7 +35,7 @@ The v0.1.0 installer is not digitally signed. Windows SmartScreen may display an
 - Logitech G102 LIGHTSYNC, USB ID `046d:c092`
 - Rust source builds use the MSVC toolchain
 
-Other mouse models and operating systems are not declared supported by v0.1.0.
+Other mouse models and operating systems are not declared supported by v0.1.1.
 
 ## Features
 
@@ -45,6 +45,7 @@ Other mouse models and operating systems are not declared supported by v0.1.0.
 - Native actions or keyboard shortcuts for the middle button, G4, G5, and G6
 - Protected native left and right clicks
 - Independent Office, CS2, and user-imported EXE profiles, each with its own pointer speed and button mappings
+- Portable configuration import and export for Office, CS2, exit, switching-rule, and imported application profiles
 - Automatic pointer-speed and button-mapping switching based on the foreground application, or a fixed profile mode
 - Device reconnect recovery and bounded retry behavior
 - Lightweight background agent and system tray; closing the GUI does not stop profile switching
@@ -74,12 +75,12 @@ This avoids repeatedly changing mouse speed by hand when moving between applicat
 
 ### No lighting control
 
-PulseHub focuses on mouse performance, button mappings, and application-aware profile switching. It **does not provide RGB or device-lighting controls**. Lighting on the supported Logitech G102 LIGHTSYNC is kept disabled, and the GUI has no color, brightness, or animation controls and no option to remove this restriction. Users who need lighting support can build it themselves from this MIT-licensed open-source project; the official v0.1.0 scope does not include lighting configuration.
+PulseHub focuses on mouse performance, button mappings, and application-aware profile switching. It **does not provide RGB or device-lighting controls**. Lighting on the supported Logitech G102 LIGHTSYNC is kept disabled, and the GUI has no color, brightness, or animation controls and no option to remove this restriction. Users who need lighting support can build it themselves from this MIT-licensed open-source project; the official v0.1.1 scope does not include lighting configuration.
 
 ## Install
 
 1. Exit Logitech G HUB to prevent both applications from controlling the mouse simultaneously.
-2. Run `PulseHub-Setup-0.1.0-windows-x64.exe`.
+2. Run `PulseHub-Setup-0.1.1-windows-x64.exe`.
 3. Choose Simplified Chinese or English for the installer.
 4. Read and accept the installation agreement and third-party notice.
 5. Choose the installation directory and the default PulseHub interface language.
